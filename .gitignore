@@ -1,0 +1,26 @@
+# Scans and scan databases — private
+*.tiff
+*.TIFF
+*.jpg
+*.jpeg
+*.JPG
+*.png
+*.PNG
+*.scans.db
+
+# Scan directories (add specific ones here if needed)
+JFZ Photo Scans/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Pytest
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
