@@ -10,7 +10,7 @@ from tag_photo import (
     init_db, sync_directory_to_db, parse_with_llm, write_exif,
     is_file_stable, check_ollama_available, make_ollama_llm_fn,
     format_timestamp, fmt_ts, read_exif, TIMESTAMP_RE,
-    print_result, prompt_accept, prompt_edit,
+    print_result, prompt_accept, prompt_edit, file_creation_time,
 )
 
 
@@ -72,6 +72,34 @@ def test_sync_adds_new_tiffs():
         rows = cursor.fetchall()
         assert rows == [("photo1.tiff", "PENDING"), ("photo2.tiff", "PENDING")]
         conn.close()
+
+
+def test_sync_stores_file_creation_time():
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "photo1.tiff")
+        open(path, "w").close()
+
+        conn = init_db(":memory:")
+        sync_directory_to_db(conn, d)
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_created_at FROM scans WHERE filename = 'photo1.tiff'")
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] is not None
+        assert row[0] > 0
+        conn.close()
+
+
+def test_file_creation_time_returns_float():
+    with tempfile.NamedTemporaryFile(suffix=".tiff", delete=False) as f:
+        path = f.name
+    try:
+        result = file_creation_time(path)
+        assert isinstance(result, float)
+        assert result > 0
+    finally:
+        os.unlink(path)
 
 
 def test_sync_detects_uppercase_TIFF():

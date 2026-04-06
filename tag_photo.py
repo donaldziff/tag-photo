@@ -10,6 +10,14 @@ import time
 import urllib.request
 import urllib.error
 from datetime import datetime
+import readline
+
+HISTORY_FILE = os.path.expanduser("~/.tag_photo_history")
+try:
+    readline.read_history_file(HISTORY_FILE)
+except FileNotFoundError:
+    pass
+readline.set_history_length(500)
 from google import genai
 from google.genai import types
 
@@ -23,11 +31,59 @@ def init_db(db_path):
             filename TEXT PRIMARY KEY,
             state TEXT,
             applied_timestamp TEXT,
-            applied_description TEXT
+            applied_description TEXT,
+            file_created_at REAL
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    # Migrate existing DBs that predate the file_created_at column
+    try:
+        cursor.execute("ALTER TABLE scans ADD COLUMN file_created_at REAL")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
     return conn
+
+
+def get_setting(conn, key):
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def set_setting(conn, key, value):
+    conn.cursor().execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+    )
+    conn.commit()
+
+
+def rekeyword_processed(conn, directory, baseline):
+    """Re-writes IPTC:Keywords on all PROCESSED files with the current baseline."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT filename FROM scans WHERE state = 'PROCESSED' ORDER BY file_created_at ASC NULLS LAST, filename")
+    files = cursor.fetchall()
+    if not files:
+        print("-> No processed files to update.")
+        return
+    print(f"Updating keywords on {len(files)} processed file(s)...")
+    for (filename,) in files:
+        file_path = os.path.join(directory, filename)
+        write_exif(file_path, None, None, keywords=baseline or None)
+        print(f"   {filename}")
+    print("-> Done.")
+
+
+def file_creation_time(path):
+    """Returns the file creation time (birth time on macOS, mtime elsewhere)."""
+    stat = os.stat(path)
+    return getattr(stat, 'st_birthtime', stat.st_mtime)
 
 
 def sync_directory_to_db(conn, directory):
@@ -43,7 +99,11 @@ def sync_directory_to_db(conn, directory):
         filename = os.path.basename(f)
         cursor.execute("SELECT state FROM scans WHERE filename = ?", (filename,))
         if not cursor.fetchone():
-            cursor.execute("INSERT INTO scans (filename, state) VALUES (?, 'PENDING')", (filename,))
+            created_at = file_creation_time(f)
+            cursor.execute(
+                "INSERT INTO scans (filename, state, file_created_at) VALUES (?, 'PENDING', ?)",
+                (filename, created_at)
+            )
             new_files_count += 1
 
     conn.commit()
@@ -307,9 +367,29 @@ def main():
     if pending_count > 0:
         print(f"\nFound {pending_count} file(s) pending.")
 
+    cursor.execute("SELECT COUNT(*) FROM scans WHERE state = 'SKIPPED'")
+    skipped_count = cursor.fetchone()[0]
+    if skipped_count > 0:
+        choice = input(f"{skipped_count} skipped file(s) from a previous session. Reprocess them? [y/N]: ").strip().lower()
+        if choice == 'y':
+            cursor.execute("UPDATE scans SET state = 'PENDING' WHERE state = 'SKIPPED'")
+            conn.commit()
+            print(f"-> {skipped_count} file(s) returned to queue.")
+
     # Shoebox Baseline
     print("\n--- Shoebox Baseline ---")
-    baseline = input("Enter baseline context for this batch (or press Enter if none): ").strip()
+    stored_baseline = get_setting(conn, 'baseline')
+    if stored_baseline:
+        print(f"Stored baseline: {stored_baseline!r}")
+        choice = input("Keep it? [Enter] / change [e] / clear [c]: ").strip().lower()
+        if choice == 'e':
+            baseline = input("Enter new baseline: ").strip()
+        elif choice == 'c':
+            baseline = ''
+        else:
+            baseline = stored_baseline
+    else:
+        baseline = input("Enter baseline context for this batch (or press Enter if none): ").strip()
 
     first_llm = local_llm_fn if local_llm_fn else paid_llm_fn
     use_local = local_llm_fn is not None
@@ -337,14 +417,25 @@ def main():
             pass
         print(" ready.")
 
-    print("\n[Watcher Mode Active]: Listening for new scans... (Type 'q' or press Ctrl+C to stop)")
+    # Save baseline and offer to re-keyword already-processed files if it changed
+    if baseline != stored_baseline:
+        set_setting(conn, 'baseline', baseline)
+        cursor.execute("SELECT COUNT(*) FROM scans WHERE state = 'PROCESSED'")
+        processed_count = cursor.fetchone()[0]
+        if processed_count > 0:
+            kw_display = repr(baseline) if baseline else '[none]'
+            action = input(f"{processed_count} already-processed file(s). Update their keywords to {kw_display}? [y/N]: ").strip().lower()
+            if action == 'y':
+                rekeyword_processed(conn, args.dir, baseline)
+
+    print("\n[Watcher Mode Active]: Listening for new scans... (Press Ctrl+C to stop)")
 
     last_preview_file = None
 
     try:
         while True:
             sync_directory_to_db(conn, args.dir)
-            cursor.execute("SELECT filename FROM scans WHERE state IN ('PENDING', 'MAYBE') ORDER BY filename")
+            cursor.execute("SELECT filename FROM scans WHERE state IN ('PENDING', 'MAYBE') ORDER BY file_created_at ASC NULLS LAST, filename")
             queue = cursor.fetchall()
 
             if not queue:
@@ -384,6 +475,7 @@ def main():
                             ["osascript", "-e", 'tell application "Preview" to close first window'],
                             stderr=subprocess.DEVNULL
                         )
+                    readline.write_history_file(HISTORY_FILE)
                     print("Exiting. Progress saved.")
                     conn.close()
                     return
@@ -399,8 +491,8 @@ def main():
                     continue
 
                 if not user_input and not baseline:
-                    print("-> No baseline and no text. Skipping.")
-                    cursor.execute("UPDATE scans SET state = 'SKIPPED' WHERE filename = ?", (filename,))
+                    print("-> No baseline and no verso text. Nothing to apply.")
+                    cursor.execute("UPDATE scans SET state = 'PROCESSED' WHERE filename = ?", (filename,))
                     conn.commit()
                     continue
 
@@ -480,11 +572,18 @@ def main():
             cursor.execute("SELECT COUNT(*) FROM scans WHERE state IN ('PENDING', 'MAYBE')")
             remaining = cursor.fetchone()[0]
             if processed_this_round and remaining == 0:
+                cursor.execute("SELECT COUNT(*) FROM scans WHERE state = 'SKIPPED'")
+                skipped_now = cursor.fetchone()[0]
+                skipped_hint = f" / revisit skipped [s] ({skipped_now} file(s))" if skipped_now else ""
                 print("\n--- All files processed. ---")
-                choice = input("Keep watching for new files [Enter] / quit [q]: ").strip().lower()
+                choice = input(f"Keep watching [Enter]{skipped_hint} / quit [q]: ").strip().lower()
                 if choice == 'q':
                     conn.close()
                     return
+                elif choice == 's' and skipped_now:
+                    cursor.execute("UPDATE scans SET state = 'PENDING' WHERE state = 'SKIPPED'")
+                    conn.commit()
+                    print(f"-> {skipped_now} file(s) returned to queue.")
 
     except KeyboardInterrupt:
         if last_preview_file:
@@ -492,6 +591,7 @@ def main():
                 ["osascript", "-e", 'tell application "Preview" to close first window'],
                 stderr=subprocess.DEVNULL
             )
+        readline.write_history_file(HISTORY_FILE)
         print("\nExiting watcher. Progress saved.")
         conn.close()
 
