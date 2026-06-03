@@ -257,3 +257,125 @@ def test_scan_directory_default_state_is_pending():
         state = conn.execute("SELECT state FROM scans").fetchone()[0]
         assert state == "PENDING"
         conn.close()
+
+
+# --- get_recent_pair / set_verso_pair ---
+
+def _seed_pair(conn, archive, scan_dir):
+    """Insert two scans into scan_dir and return (recto_hash, verso_hash)."""
+    sd_path = os.path.join(archive, scan_dir)
+    recto_path = make_tiff(sd_path, "scan0015.tif", b"recto content")
+    tagger.scan_directory(conn, archive, scan_dir)
+    verso_path = make_tiff(sd_path, "scan0016.tif", b"verso content")
+    tagger.scan_directory(conn, archive, scan_dir)
+    return tagger.hash_file(recto_path), tagger.hash_file(verso_path)
+
+
+def test_get_recent_pair_returns_none_for_empty_dir():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        assert tagger.get_recent_pair(conn, "scans-2024-01") is None
+        conn.close()
+
+
+def test_get_recent_pair_returns_none_for_single_scan():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        assert tagger.get_recent_pair(conn, "scans-2024-01") is None
+        conn.close()
+
+
+def test_get_recent_pair_last_added_is_verso_candidate():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+
+        pair = tagger.get_recent_pair(conn, "scans-2024-01")
+
+        assert pair is not None
+        (got_recto_hash, recto_fn), (got_verso_hash, verso_fn) = pair
+        assert got_recto_hash == recto_hash
+        assert got_verso_hash == verso_hash
+        assert recto_fn == "scan0015.tif"
+        assert verso_fn == "scan0016.tif"
+        conn.close()
+
+
+def test_get_recent_pair_scoped_to_scan_dir():
+    """A scan in a different directory must not appear in the pair."""
+    with tempfile.TemporaryDirectory() as d:
+        for sd in ["scans-2024-01", "scans-2024-02"]:
+            os.makedirs(os.path.join(d, sd))
+        conn = tagger.init_db(d)
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"other dir")
+        tagger.scan_directory(conn, d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-02"), "scan0015.tif", b"recto")
+        tagger.scan_directory(conn, d, "scans-2024-02")
+        make_tiff(os.path.join(d, "scans-2024-02"), "scan0016.tif", b"verso")
+        tagger.scan_directory(conn, d, "scans-2024-02")
+
+        pair = tagger.get_recent_pair(conn, "scans-2024-02")
+
+        assert pair is not None
+        (_, recto_fn), (_, verso_fn) = pair
+        assert recto_fn == "scan0015.tif"
+        assert verso_fn == "scan0016.tif"
+        conn.close()
+
+
+def test_set_verso_pair_marks_is_verso():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+
+        is_verso = conn.execute(
+            "SELECT is_verso FROM scans WHERE hash = ?", (verso_hash,)
+        ).fetchone()[0]
+        assert is_verso == 1
+        conn.close()
+
+
+def test_set_verso_pair_recto_not_marked_verso():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+
+        is_verso = conn.execute(
+            "SELECT is_verso FROM scans WHERE hash = ?", (recto_hash,)
+        ).fetchone()[0]
+        assert is_verso == 0
+        conn.close()
+
+
+def test_set_verso_pair_links_verso_hash_on_recto():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+
+        linked = conn.execute(
+            "SELECT verso_hash FROM scans WHERE hash = ?", (recto_hash,)
+        ).fetchone()[0]
+        assert linked == verso_hash
+        conn.close()
+
+
+def test_set_verso_pair_recto_has_no_verso_hash_on_itself():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+
+        linked = conn.execute(
+            "SELECT verso_hash FROM scans WHERE hash = ?", (verso_hash,)
+        ).fetchone()[0]
+        assert linked is None
+        conn.close()

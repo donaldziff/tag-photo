@@ -26,6 +26,25 @@ def cmd_scan_dir(args):
     print(f"Registered {added} new scan(s) from {args.dir}")
 
 
+def cmd_mark_verso(args):
+    conn = tagger.init_db(args.archive)
+    pair = tagger.get_recent_pair(conn, args.dir)
+    if pair is None:
+        print("Error: need at least 2 scans in this directory.", file=sys.stderr)
+        conn.close()
+        sys.exit(1)
+    (recto_hash, recto_filename), (verso_hash, verso_filename) = pair
+    print(f"  Recto : {recto_filename}")
+    print(f"  Verso : {verso_filename}")
+    confirm = input("Mark as recto/verso pair? [y/N]: ").strip().lower()
+    if confirm == "y":
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+        print("-> Paired.")
+    else:
+        print("-> Cancelled.")
+    conn.close()
+
+
 # --- argument parsing ---
 
 def make_parser():
@@ -48,6 +67,11 @@ def make_parser():
     p_scan.add_argument("-d", "--dir", required=True, metavar="SCAN_DIR",
                         help="Scan subdirectory name (relative to archive root)")
 
+    p_verso = sub.add_parser("mark-verso", parents=[common],
+                              help="Pair the two most recently added scans as recto/verso")
+    p_verso.add_argument("-d", "--dir", required=True, metavar="SCAN_DIR",
+                         help="Scan subdirectory name (relative to archive root)")
+
     return parser
 
 
@@ -57,6 +81,7 @@ def main():
     dispatch = {
         "init": cmd_init,
         "scan-dir": cmd_scan_dir,
+        "mark-verso": cmd_mark_verso,
     }
     dispatch[args.command](args)
 

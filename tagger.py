@@ -60,6 +60,30 @@ def _find_tiffs(dir_path):
     )
 
 
+def get_recent_pair(conn, scan_dir):
+    """Return ((recto_hash, recto_filename), (verso_hash, verso_filename)) for the
+    two most recently registered scans in scan_dir, or None if fewer than 2 exist.
+
+    The higher-rowid record is treated as the verso candidate (it was scanned last).
+    """
+    rows = conn.execute(
+        "SELECT hash, filename FROM scans WHERE scan_dir = ? ORDER BY rowid DESC LIMIT 2",
+        (scan_dir,),
+    ).fetchall()
+    if len(rows) < 2:
+        return None
+    verso = rows[0]   # most recently added
+    recto = rows[1]
+    return recto, verso
+
+
+def set_verso_pair(conn, recto_hash, verso_hash):
+    """Mark verso_hash as a verso and link it from recto_hash."""
+    conn.execute("UPDATE scans SET is_verso = 1 WHERE hash = ?", (verso_hash,))
+    conn.execute("UPDATE scans SET verso_hash = ? WHERE hash = ?", (verso_hash, recto_hash))
+    conn.commit()
+
+
 def scan_directory(conn, archive_root, scan_dir):
     """Hash all TIFFs in scan_dir and register new ones as PENDING.
 
