@@ -84,9 +84,10 @@ def set_verso_pair(conn, recto_hash, verso_hash):
     conn.commit()
 
 
-def scan_directory(conn, archive_root, scan_dir):
+def scan_directory(conn, archive_root, scan_dir, envelope_id=None):
     """Hash all TIFFs in scan_dir and register new ones as PENDING.
 
+    If envelope_id is given it is set on newly inserted records only.
     Returns the number of newly added records.
     """
     dir_path = os.path.join(archive_root, scan_dir)
@@ -95,9 +96,9 @@ def scan_directory(conn, archive_root, scan_dir):
         file_hash = hash_file(path)
         filename = os.path.basename(path)
         cursor = conn.execute(
-            "INSERT OR IGNORE INTO scans (hash, filename, scan_dir, state)"
-            " VALUES (?, ?, ?, 'PENDING')",
-            (file_hash, filename, scan_dir),
+            "INSERT OR IGNORE INTO scans (hash, filename, scan_dir, envelope_id, state)"
+            " VALUES (?, ?, ?, ?, 'PENDING')",
+            (file_hash, filename, scan_dir, envelope_id),
         )
         if cursor.rowcount > 0:
             added += 1

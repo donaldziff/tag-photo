@@ -155,6 +155,60 @@ def test_scan_directory_is_idempotent():
         conn.close()
 
 
+def test_scan_directory_sets_envelope_id():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="88")
+
+        envelope_id = conn.execute("SELECT envelope_id FROM scans").fetchone()[0]
+        assert envelope_id == "88"
+        conn.close()
+
+
+def test_scan_directory_no_envelope_leaves_null():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+
+        envelope_id = conn.execute("SELECT envelope_id FROM scans").fetchone()[0]
+        assert envelope_id is None
+        conn.close()
+
+
+def test_scan_directory_envelope_only_on_new_scans():
+    """Re-running scan-dir with a different envelope must not overwrite existing records."""
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="88")
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="99")
+
+        envelope_id = conn.execute("SELECT envelope_id FROM scans").fetchone()[0]
+        assert envelope_id == "88"
+        conn.close()
+
+
+def test_scan_directory_different_envelopes_per_batch():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="88")
+
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0002.tif", b"img2")
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="89")
+
+        rows = conn.execute(
+            "SELECT filename, envelope_id FROM scans ORDER BY filename"
+        ).fetchall()
+        assert rows == [("scan0001.tif", "88"), ("scan0002.tif", "89")]
+        conn.close()
+
+
 def test_scan_directory_preserves_existing_state():
     with tempfile.TemporaryDirectory() as d:
         conn, archive = open_archive(d, "scans-2024-01")

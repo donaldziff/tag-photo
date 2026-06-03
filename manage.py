@@ -21,9 +21,10 @@ def cmd_scan_dir(args):
         print(f"Error: scan directory not found: {scan_dir_path}", file=sys.stderr)
         sys.exit(1)
     conn = tagger.init_db(args.archive)
-    added = tagger.scan_directory(conn, args.archive, args.dir)
+    added = tagger.scan_directory(conn, args.archive, args.dir, envelope_id=args.envelope)
     conn.close()
-    print(f"Registered {added} new scan(s) from {args.dir}")
+    envelope_note = f" (envelope {args.envelope})" if args.envelope else ""
+    print(f"Registered {added} new scan(s) from {args.dir}{envelope_note}")
 
 
 def cmd_mark_verso(args):
@@ -66,6 +67,8 @@ def make_parser():
                              help="Hash TIFFs in a scan directory and register new ones")
     p_scan.add_argument("-d", "--dir", required=True, metavar="SCAN_DIR",
                         help="Scan subdirectory name (relative to archive root)")
+    p_scan.add_argument("-e", "--envelope", metavar="ENVELOPE_ID",
+                        help="Envelope ID to assign to newly registered scans")
 
     p_verso = sub.add_parser("mark-verso", parents=[common],
                               help="Pair the two most recently added scans as recto/verso")
