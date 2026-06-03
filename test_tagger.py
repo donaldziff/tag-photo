@@ -313,6 +313,47 @@ def test_scan_directory_default_state_is_pending():
         conn.close()
 
 
+# --- upsert_envelope ---
+
+def test_upsert_envelope_creates_record():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88")
+        row = conn.execute("SELECT id, description FROM envelopes WHERE id = '88'").fetchone()
+        assert row is not None
+        assert row[0] == "88"
+        conn.close()
+
+
+def test_upsert_envelope_sets_description():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod summer 1972")
+        desc = conn.execute("SELECT description FROM envelopes WHERE id = '88'").fetchone()[0]
+        assert desc == "Cape Cod summer 1972"
+        conn.close()
+
+
+def test_upsert_envelope_does_not_overwrite_existing_description():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "original description")
+        tagger.upsert_envelope(conn, "88", "new description")
+        desc = conn.execute("SELECT description FROM envelopes WHERE id = '88'").fetchone()[0]
+        assert desc == "original description"
+        conn.close()
+
+
+def test_upsert_envelope_is_idempotent():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        count = conn.execute("SELECT COUNT(*) FROM envelopes WHERE id = '88'").fetchone()[0]
+        assert count == 1
+        conn.close()
+
+
 # --- get_recent_pair / set_verso_pair ---
 
 def _seed_pair(conn, archive, scan_dir):

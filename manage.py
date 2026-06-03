@@ -21,6 +21,8 @@ def cmd_scan_dir(args):
         print(f"Error: scan directory not found: {scan_dir_path}", file=sys.stderr)
         sys.exit(1)
     conn = tagger.init_db(args.archive)
+    if args.envelope:
+        tagger.upsert_envelope(conn, args.envelope, args.envelope_desc)
     added = tagger.scan_directory(conn, args.archive, args.dir, envelope_id=args.envelope)
     conn.close()
     envelope_note = f" (envelope {args.envelope})" if args.envelope else ""
@@ -69,6 +71,8 @@ def make_parser():
                         help="Scan subdirectory name (relative to archive root)")
     p_scan.add_argument("-e", "--envelope", metavar="ENVELOPE_ID",
                         help="Envelope ID to assign to newly registered scans")
+    p_scan.add_argument("--envelope-desc", metavar="DESCRIPTION",
+                        help="Description for the envelope (set on first use only)")
 
     p_verso = sub.add_parser("mark-verso", parents=[common],
                               help="Pair the two most recently added scans as recto/verso")

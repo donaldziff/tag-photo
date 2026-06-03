@@ -60,6 +60,16 @@ def _find_tiffs(dir_path):
     )
 
 
+def upsert_envelope(conn, envelope_id, description=None):
+    """Create envelope if it doesn't exist. Description is set on insert only;
+    an existing description is never overwritten."""
+    conn.execute(
+        "INSERT OR IGNORE INTO envelopes (id, description) VALUES (?, ?)",
+        (envelope_id, description),
+    )
+    conn.commit()
+
+
 def get_recent_pair(conn, scan_dir):
     """Return ((recto_hash, recto_filename), (verso_hash, verso_filename)) for the
     two most recently registered scans in scan_dir, or None if fewer than 2 exist.
