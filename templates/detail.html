@@ -104,7 +104,7 @@
       {% endif %}
     </div>
 
-    {% if editable %}
+    {% if editable and not safe_mode %}
     <!-- Editable form -->
     <form method="POST" action="{{ accept_url }}">
       <div class="field">
@@ -160,7 +160,7 @@
     {% endif %}
 
     {% else %}
-    <!-- Read-only view -->
+    <!-- Read-only view (safe mode or browse mode for non-editable states) -->
     <div class="field">
       <label>Envelope</label>
       <div class="readonly-val {% if not scan['envelope_id'] %}empty{% endif %}">
@@ -190,11 +190,13 @@
         {% if scan['date_source'] %}<span style="color:#aaa; font-size:11px;">({{ scan['date_source'] }})</span>{% endif %}
       </div>
     </div>
+    {% if not safe_mode %}
     <div class="actions">
       <form method="POST" action="{{ url_for('browse_edit', scan_dir=scan_dir, hash_val=scan['hash']) }}">
         <button class="btn">Edit</button>
       </form>
     </div>
+    {% endif %}
     {% endif %}
 
     <!-- EXIF readback -->

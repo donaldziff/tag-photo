@@ -26,6 +26,17 @@ def close_db(error):
         db.close()
 
 
+@app.before_request
+def enforce_safe_mode():
+    if app.config.get("SAFE_MODE") and request.method == "POST":
+        return "Safe mode is active — all writes are disabled.", 403
+
+
+@app.context_processor
+def inject_globals():
+    return {"safe_mode": app.config.get("SAFE_MODE", False)}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,8 +221,13 @@ def main():
     parser = argparse.ArgumentParser(description="Photo tagging web UI")
     parser.add_argument("-a", "--archive", required=True, metavar="ARCHIVE_ROOT")
     parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--safe", action="store_true",
+                        help="Read-only mode: disable all writes")
     args = parser.parse_args()
     app.config["ARCHIVE_ROOT"] = os.path.expanduser(args.archive)
+    app.config["SAFE_MODE"] = args.safe
+    if args.safe:
+        print("Safe mode: all writes disabled.")
     app.run(debug=True, port=args.port)
 
 
