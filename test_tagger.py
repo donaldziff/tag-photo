@@ -1,6 +1,10 @@
 import hashlib
+import json
 import os
 import tempfile
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 import tagger
 
@@ -124,7 +128,9 @@ def test_scan_directory_adds_tiffs():
             "SELECT filename, scan_dir, state FROM scans ORDER BY filename"
         ).fetchall()
         assert len(rows) == 2
-        assert rows[0] == ("scan0001.tif", "scans-2024-01", "PENDING")
+        assert rows[0]["filename"] == "scan0001.tif"
+        assert rows[0]["scan_dir"] == "scans-2024-01"
+        assert rows[0]["state"] == "PENDING"
         conn.close()
 
 
@@ -205,7 +211,10 @@ def test_scan_directory_different_envelopes_per_batch():
         rows = conn.execute(
             "SELECT filename, envelope_id FROM scans ORDER BY filename"
         ).fetchall()
-        assert rows == [("scan0001.tif", "88"), ("scan0002.tif", "89")]
+        assert rows[0]["filename"] == "scan0001.tif"
+        assert rows[0]["envelope_id"] == "88"
+        assert rows[1]["filename"] == "scan0002.tif"
+        assert rows[1]["envelope_id"] == "89"
         conn.close()
 
 
@@ -541,4 +550,228 @@ def test_set_verso_pair_recto_has_no_verso_hash_on_itself():
             "SELECT verso_hash FROM scans WHERE hash = ?", (verso_hash,)
         ).fetchone()[0]
         assert linked is None
+        conn.close()
+
+
+# --- _date_to_exif_ts ---
+
+def test_date_to_exif_ts_year_only():
+    assert tagger._date_to_exif_ts("1987") == "1987:01:01 12:00:00"
+
+
+def test_date_to_exif_ts_year_month():
+    assert tagger._date_to_exif_ts("1987-06") == "1987:06:01 12:00:00"
+
+
+def test_date_to_exif_ts_full_date():
+    assert tagger._date_to_exif_ts("1987-06-15") == "1987:06:15 12:00:00"
+
+
+def test_date_to_exif_ts_none():
+    assert tagger._date_to_exif_ts(None) is None
+
+
+# --- write_exif ---
+
+def test_write_exif_sets_all_date_fields():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        tagger.write_exif("/tmp/photo.tif", date_inferred="1987-06-15")
+        args = mock_run.call_args[0][0]
+        assert any("DateTimeOriginal=1987:06:15 12:00:00" in a for a in args)
+        assert any("IPTC:DateCreated=1987:06:15 12:00:00" in a for a in args)
+        assert any("XMP:CreateDate=1987:06:15 12:00:00" in a for a in args)
+
+
+def test_write_exif_sets_description():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        tagger.write_exif("/tmp/photo.tif", description="Summer holiday")
+        args = mock_run.call_args[0][0]
+        assert any("Description=Summer holiday" in a for a in args)
+
+
+def test_write_exif_sets_keywords_from_envelope():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        tagger.write_exif("/tmp/photo.tif", envelope_description="Cape Cod 1972")
+        args = mock_run.call_args[0][0]
+        assert any("Keywords=Cape Cod 1972" in a for a in args)
+
+
+def test_write_exif_raises_on_failure():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="exiftool error")
+        with pytest.raises(RuntimeError, match="exiftool failed"):
+            tagger.write_exif("/tmp/photo.tif", date_inferred="1987")
+
+
+def test_write_exif_skips_missing_fields():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        tagger.write_exif("/tmp/photo.tif")
+        args = mock_run.call_args[0][0]
+        assert not any("DateTimeOriginal" in a for a in args)
+        assert not any("Description" in a for a in args)
+        assert not any("Keywords" in a for a in args)
+
+
+# --- read_exif ---
+
+def test_read_exif_returns_fields():
+    exif_json = json.dumps([{
+        "SourceFile": "/tmp/photo.tif",
+        "DateTimeOriginal": "1987:06:15 12:00:00",
+        "Description": "Summer holiday",
+    }])
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout=exif_json)
+        result = tagger.read_exif("/tmp/photo.tif")
+    assert result["DateTimeOriginal"] == "1987:06:15 12:00:00"
+    assert result["Description"] == "Summer holiday"
+
+
+def test_read_exif_returns_empty_on_failure():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        assert tagger.read_exif("/tmp/photo.tif") == {}
+
+
+# --- get_scan / get_scans_for_dir / get_scan_dirs ---
+
+def test_get_scan_returns_record():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        path = make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = tagger.hash_file(path)
+        scan = tagger.get_scan(conn, h)
+        assert scan is not None
+        assert scan["filename"] == "scan0001.tif"
+        conn.close()
+
+
+def test_get_scan_returns_none_for_unknown():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        assert tagger.get_scan(conn, "deadbeef") is None
+        conn.close()
+
+
+def test_get_scans_for_dir_excludes_versos():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        recto_hash, verso_hash = _seed_pair(conn, archive, "scans-2024-01")
+        tagger.set_verso_pair(conn, recto_hash, verso_hash)
+        scans = tagger.get_scans_for_dir(conn, "scans-2024-01")
+        assert len(scans) == 1
+        assert scans[0]["hash"] == recto_hash
+        conn.close()
+
+
+def test_get_scans_for_dir_pending_only():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        for i, content in enumerate([b"a", b"b", b"c"]):
+            make_tiff(os.path.join(d, "scans-2024-01"), f"scan{i:04d}.tif", content)
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        all_scans = tagger.get_scans_for_dir(conn, "scans-2024-01")
+        conn.execute("UPDATE scans SET state='REVIEWED' WHERE hash=?", (all_scans[0]["hash"],))
+        pending = tagger.get_scans_for_dir(conn, "scans-2024-01", pending_only=True)
+        assert len(pending) == 2
+        conn.close()
+
+
+def test_get_scan_dirs_returns_distinct_dirs():
+    with tempfile.TemporaryDirectory() as d:
+        for sd in ["scans-2024-01", "scans-2024-02"]:
+            os.makedirs(os.path.join(d, sd))
+        conn = tagger.init_db(d)
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"a")
+        tagger.scan_directory(conn, d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-02"), "scan0001.tif", b"b")
+        tagger.scan_directory(conn, d, "scans-2024-02")
+        dirs = tagger.get_scan_dirs(conn)
+        assert dirs == ["scans-2024-01", "scans-2024-02"]
+        conn.close()
+
+
+# --- set_scan_state / reopen_photo ---
+
+def test_set_scan_state():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+        tagger.set_scan_state(conn, h, "SKIPPED")
+        assert conn.execute("SELECT state FROM scans WHERE hash=?", (h,)).fetchone()[0] == "SKIPPED"
+        conn.close()
+
+
+def test_reopen_photo_clears_export_state():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+        conn.execute("UPDATE scans SET state='EXPORTED', jpeg_path='export/x.jpg' WHERE hash=?", (h,))
+        conn.commit()
+        tagger.reopen_photo(conn, h)
+        row = conn.execute("SELECT state, jpeg_path, uploaded_at FROM scans WHERE hash=?", (h,)).fetchone()
+        assert row["state"] == "REVIEWED"
+        assert row["jpeg_path"] is None
+        assert row["uploaded_at"] is None
+        conn.close()
+
+
+def test_reopen_photo_noop_for_pending():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+        tagger.reopen_photo(conn, h)
+        state = conn.execute("SELECT state FROM scans WHERE hash=?", (h,)).fetchone()[0]
+        assert state == "PENDING"
+        conn.close()
+
+
+# --- accept_photo ---
+
+def test_accept_photo_saves_metadata_and_sets_reviewed():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+
+        with patch("tagger.write_exif"):
+            tagger.accept_photo(conn, h, archive,
+                                description="Family at beach",
+                                date_inferred="1972-07",
+                                date_source="manual")
+
+        row = conn.execute("SELECT * FROM scans WHERE hash=?", (h,)).fetchone()
+        assert row["state"] == "REVIEWED"
+        assert row["description"] == "Family at beach"
+        assert row["date_inferred"] == "1972-07"
+        assert row["date_source"] == "manual"
+        conn.close()
+
+
+def test_accept_photo_clears_jpeg_path_when_exported():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+        conn.execute("UPDATE scans SET state='EXPORTED', jpeg_path='export/x.jpg' WHERE hash=?", (h,))
+        conn.commit()
+
+        with patch("tagger.write_exif"):
+            tagger.accept_photo(conn, h, archive)
+
+        row = conn.execute("SELECT jpeg_path FROM scans WHERE hash=?", (h,)).fetchone()
+        assert row["jpeg_path"] is None
         conn.close()

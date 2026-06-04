@@ -10,7 +10,7 @@ A two-phase tool for digitizing and tagging a personal photo archive.
 
 ```bash
 brew install exiftool
-pip install flask google-genai anthropic
+pip install flask pillow google-genai anthropic
 ```
 
 At least one LLM backend must be configured (see Tagging section).

@@ -25,6 +25,9 @@ venv/
 .idea/
 .vscode/
 
+# Generated thumbnail cache
+.thumbs/
+
 # Emacs
 *~
 \#*\#

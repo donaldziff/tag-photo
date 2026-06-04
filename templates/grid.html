@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ scan_dir }}{% endblock %}
+{% block head %}
+<style>
+  .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .toolbar h2 { font-size:15px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px; }
+  .card { background:#fff; border:1px solid #ddd; border-radius:6px; overflow:hidden;
+          transition:box-shadow .15s; }
+  .card:hover { box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  .card a { display:block; text-decoration:none; color:inherit; }
+  .card img { width:100%; display:block; aspect-ratio:3/4; object-fit:cover; background:#e8e8e8; }
+  .card-info { padding:6px 8px; font-size:12px; }
+  .card-env { font-weight:600; color:#222; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card-file { color:#888; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
+  .card-meta { margin-top:3px; display:flex; align-items:center; gap:4px; }
+  .empty { margin-top:60px; text-align:center; color:#888; }
+  .empty a { color:#2563eb; }
+</style>
+{% endblock %}
+{% block nav %}
+  <span class="sep">|</span>
+  <a href="{{ url_for('tag_grid', scan_dir=scan_dir) }}"
+     {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
+    Tag{% if pending_count %} ({{ pending_count }}){% endif %}
+  </a>
+  <a href="{{ url_for('browse_grid', scan_dir=scan_dir) }}"
+     {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
+  <span class="sep">|</span>
+  <span style="color:#666; font-size:12px;">{{ scan_dir }}</span>
+{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2>
+    {% if mode == 'tag' %}
+      {{ scans|length }} photo{{ scans|length|pluralize }} pending
+    {% else %}
+      {{ scans|length }} photo{{ scans|length|pluralize }}
+    {% endif %}
+  </h2>
+</div>
+
+{% if scans %}
+<div class="grid">
+  {% for scan in scans %}
+  {% set detail_url = url_for('tag_detail' if mode=='tag' else 'browse_detail',
+                               scan_dir=scan_dir, hash_val=scan['hash']) %}
+  <div class="card">
+    <a href="{{ detail_url }}">
+      <img src="{{ url_for('thumbnail', hash_val=scan['hash']) }}" loading="lazy"
+           alt="{{ scan['filename'] }}">
+      <div class="card-info">
+        <div class="card-env">{{ scan['envelope_id'] or '—' }}</div>
+        <div class="card-file">{{ scan['filename'] }}</div>
+        <div class="card-meta">
+          {% if mode == 'browse' %}
+            <span class="badge badge-{{ scan['state']|lower }}">{{ scan['state'] }}</span>
+          {% endif %}
+          {% if scan['verso_hash'] %}
+            <span title="has verso" style="color:#888; font-size:11px;">↔ verso</span>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  {% if mode == 'tag' %}
+    No pending photos. <a href="{{ url_for('browse_grid', scan_dir=scan_dir) }}">Browse all →</a>
+  {% else %}
+    No photos found.
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

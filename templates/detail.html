@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}{{ scan['filename'] }}{% endblock %}
+{% block head %}
+<style>
+  .page { display:grid; grid-template-columns:1fr 340px; gap:20px; align-items:start; }
+  @media (max-width:900px) { .page { grid-template-columns:1fr; } }
+
+  .images { display:flex; gap:12px; align-items:flex-start; }
+  .img-recto { flex:1; min-width:0; }
+  .img-verso { flex:0 0 240px; }
+  .img-recto img, .img-verso img { width:100%; border:1px solid #ccc; border-radius:4px;
+                                    display:block; background:#e8e8e8; }
+  .verso-label { font-size:11px; color:#888; text-transform:uppercase;
+                 letter-spacing:.5px; margin-bottom:4px; }
+
+  .sidebar { background:#fff; border:1px solid #ddd; border-radius:6px; padding:16px; }
+  .photo-header { margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #eee; }
+  .photo-title { font-size:13px; font-weight:600; color:#333; }
+  .photo-sub { font-size:12px; color:#777; margin-top:2px; }
+
+  .field { margin-bottom:12px; }
+  label { display:block; font-size:11px; font-weight:600; text-transform:uppercase;
+          letter-spacing:.5px; color:#777; margin-bottom:4px; }
+  input[type=text], textarea, select {
+    width:100%; padding:6px 8px; border:1px solid #ddd; border-radius:4px;
+    font-size:13px; font-family:inherit; background:#fafafa; }
+  input[type=text]:focus, textarea:focus, select:focus {
+    outline:none; border-color:#2563eb; background:#fff; }
+  textarea { resize:vertical; min-height:56px; }
+  .readonly-val { font-size:13px; color:#333; padding:2px 0;
+                  min-height:20px; white-space:pre-wrap; word-break:break-word; }
+  .readonly-val.empty { color:#bbb; font-style:italic; }
+
+  .actions { display:flex; gap:8px; flex-wrap:wrap; padding-top:12px;
+             border-top:1px solid #eee; margin-top:4px; }
+
+  .nav-row { display:flex; justify-content:space-between; align-items:center;
+             margin-bottom:14px; }
+  .nav-row .nav-links { display:flex; gap:8px; }
+
+  .exif-section { margin-top:14px; padding-top:12px; border-top:1px solid #eee; }
+  .exif-title { font-size:11px; font-weight:600; text-transform:uppercase;
+                letter-spacing:.5px; color:#aaa; margin-bottom:6px; }
+  .exif-row { display:flex; gap:6px; font-size:11px; font-family:monospace;
+              margin-bottom:2px; }
+  .exif-key { color:#aaa; min-width:100px; flex-shrink:0; }
+  .exif-val { color:#555; word-break:break-all; }
+</style>
+{% endblock %}
+{% block nav %}
+  <span class="sep" style="color:#444">|</span>
+  <a href="{{ url_for('tag_grid', scan_dir=scan_dir) }}"
+     {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
+    Tag{% if pending_count %} ({{ pending_count }}){% endif %}
+  </a>
+  <a href="{{ url_for('browse_grid', scan_dir=scan_dir) }}"
+     {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
+  <span class="sep" style="color:#444">|</span>
+  <span style="color:#666; font-size:12px;">{{ scan_dir }}</span>
+{% endblock %}
+
+{% set editable = mode == 'tag' or (mode == 'browse' and scan['state'] in ('PENDING','REVIEWED','NEEDS_PAIRING')) %}
+{% set accept_url = url_for('tag_accept' if mode=='tag' else 'browse_accept',
+                             scan_dir=scan_dir, hash_val=scan['hash']) %}
+
+{% block content %}
+<div class="nav-row">
+  <div>
+    <span class="badge badge-{{ scan['state']|lower }}">{{ scan['state'] }}</span>
+    <span style="font-size:13px; color:#555; margin-left:8px;">{{ scan['filename'] }}</span>
+  </div>
+  <div class="nav-links">
+    {% if prev_hash %}
+    <a href="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail',
+                        scan_dir=scan_dir, hash_val=prev_hash) }}" class="btn btn-sm">← Prev</a>
+    {% endif %}
+    {% if next_hash %}
+    <a href="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail',
+                        scan_dir=scan_dir, hash_val=next_hash) }}" class="btn btn-sm">Next →</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="page">
+  <!-- Images -->
+  <div class="images">
+    <div class="img-recto">
+      <img src="{{ url_for('image', hash_val=scan['hash']) }}" alt="recto">
+    </div>
+    {% if verso %}
+    <div class="img-verso">
+      <div class="verso-label">Verso</div>
+      <img src="{{ url_for('image', hash_val=verso['hash']) }}" alt="verso">
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="photo-header">
+      <div class="photo-title">{{ scan['filename'] }}</div>
+      {% if envelope %}
+      <div class="photo-sub">Envelope {{ envelope['id'] }}{% if envelope['description'] %} — {{ envelope['description'] }}{% endif %}</div>
+      {% endif %}
+    </div>
+
+    {% if editable %}
+    <!-- Editable form -->
+    <form method="POST" action="{{ accept_url }}">
+      <div class="field">
+        <label>Envelope</label>
+        <select name="envelope_id">
+          <option value="">— none —</option>
+          {% for env_id, env_desc, _ in envelopes %}
+          <option value="{{ env_id }}" {% if scan['envelope_id'] == env_id %}selected{% endif %}>
+            {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <textarea name="description">{{ scan['description'] or '' }}</textarea>
+      </div>
+      <div class="field">
+        <label>Verso text</label>
+        <textarea name="verso_text">{{ scan['verso_text'] or '' }}</textarea>
+      </div>
+      <div class="field">
+        <label>Recto stamp</label>
+        <input type="text" name="recto_stamp_text" value="{{ scan['recto_stamp_text'] or '' }}">
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input type="text" name="date_inferred" value="{{ scan['date_inferred'] or '' }}"
+               placeholder="YYYY, YYYY-MM, or YYYY-MM-DD">
+      </div>
+      <div class="field">
+        <label>Date source</label>
+        <select name="date_source">
+          <option value="">—</option>
+          {% for src in ['verso_text','verso_image','recto_stamp','llm_guess','manual'] %}
+          <option value="{{ src }}" {% if scan['date_source'] == src %}selected{% endif %}>{{ src }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Accept →</button>
+      </div>
+    </form>
+    {% if mode == 'tag' %}
+    <div class="actions" style="margin-top:8px;">
+      <form method="POST" action="{{ url_for('tag_skip', scan_dir=scan_dir, hash_val=scan['hash']) }}">
+        <button class="btn">Skip</button>
+      </form>
+      <form method="POST" action="{{ url_for('tag_needs_pairing', scan_dir=scan_dir, hash_val=scan['hash']) }}">
+        <button class="btn btn-warning btn-sm">Needs Pairing</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <!-- Read-only view -->
+    <div class="field">
+      <label>Envelope</label>
+      <div class="readonly-val {% if not scan['envelope_id'] %}empty{% endif %}">
+        {% if envelope %}{{ envelope['id'] }}{% if envelope['description'] %} — {{ envelope['description'] }}{% endif %}
+        {% else %}none{% endif %}
+      </div>
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <div class="readonly-val {% if not scan['description'] %}empty{% endif %}">
+        {{ scan['description'] or 'none' }}</div>
+    </div>
+    <div class="field">
+      <label>Verso text</label>
+      <div class="readonly-val {% if not scan['verso_text'] %}empty{% endif %}">
+        {{ scan['verso_text'] or 'none' }}</div>
+    </div>
+    <div class="field">
+      <label>Recto stamp</label>
+      <div class="readonly-val {% if not scan['recto_stamp_text'] %}empty{% endif %}">
+        {{ scan['recto_stamp_text'] or 'none' }}</div>
+    </div>
+    <div class="field">
+      <label>Date</label>
+      <div class="readonly-val {% if not scan['date_inferred'] %}empty{% endif %}">
+        {{ scan['date_inferred'] or 'none' }}
+        {% if scan['date_source'] %}<span style="color:#aaa; font-size:11px;">({{ scan['date_source'] }})</span>{% endif %}
+      </div>
+    </div>
+    <div class="actions">
+      <form method="POST" action="{{ url_for('browse_edit', scan_dir=scan_dir, hash_val=scan['hash']) }}">
+        <button class="btn">Edit</button>
+      </form>
+    </div>
+    {% endif %}
+
+    <!-- EXIF readback -->
+    <div class="exif-section">
+      <div class="exif-title">EXIF on file</div>
+      {% set shown = namespace(count=0) %}
+      {% for key, val in exif.items() %}
+        {% if key != 'SourceFile' %}
+        <div class="exif-row">
+          <span class="exif-key">{{ key }}</span>
+          <span class="exif-val">{{ val }}</span>
+        </div>
+        {% set shown.count = shown.count + 1 %}
+        {% endif %}
+      {% endfor %}
+      {% if shown.count == 0 %}
+        <span style="color:#ccc; font-size:11px; font-family:monospace;">none written</span>
+      {% endif %}
+    </div>
+
+  </div><!-- sidebar -->
+</div><!-- page -->
+{% endblock %}
