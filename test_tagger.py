@@ -334,13 +334,48 @@ def test_upsert_envelope_sets_description():
         conn.close()
 
 
-def test_upsert_envelope_does_not_overwrite_existing_description():
+def test_upsert_envelope_updates_existing_description():
     with tempfile.TemporaryDirectory() as d:
         conn = tagger.init_db(d)
         tagger.upsert_envelope(conn, "88", "original description")
-        tagger.upsert_envelope(conn, "88", "new description")
+        tagger.upsert_envelope(conn, "88", "corrected description")
         desc = conn.execute("SELECT description FROM envelopes WHERE id = '88'").fetchone()[0]
-        assert desc == "original description"
+        assert desc == "corrected description"
+        conn.close()
+
+
+def test_upsert_envelope_returns_created():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        result = tagger.upsert_envelope(conn, "88", "Cape Cod")
+        assert result == "created"
+        conn.close()
+
+
+def test_upsert_envelope_returns_updated():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "original")
+        result = tagger.upsert_envelope(conn, "88", "updated")
+        assert result == "updated"
+        conn.close()
+
+
+def test_upsert_envelope_returns_unchanged_when_same_desc():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        result = tagger.upsert_envelope(conn, "88", "Cape Cod")
+        assert result == "unchanged"
+        conn.close()
+
+
+def test_upsert_envelope_returns_unchanged_when_no_desc():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        result = tagger.upsert_envelope(conn, "88")
+        assert result == "unchanged"
         conn.close()
 
 
@@ -351,6 +386,39 @@ def test_upsert_envelope_is_idempotent():
         tagger.upsert_envelope(conn, "88", "Cape Cod")
         count = conn.execute("SELECT COUNT(*) FROM envelopes WHERE id = '88'").fetchone()[0]
         assert count == 1
+        conn.close()
+
+
+def test_list_envelopes_returns_all():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        tagger.upsert_envelope(conn, "89", "Budapest")
+        rows = tagger.list_envelopes(conn)
+        assert len(rows) == 2
+        assert rows[0][0] == "88"
+        assert rows[1][0] == "89"
+        conn.close()
+
+
+def test_list_envelopes_includes_scan_count():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0002.tif", b"img2")
+        tagger.scan_directory(conn, archive, "scans-2024-01", envelope_id="88")
+        rows = tagger.list_envelopes(conn)
+        assert rows[0][2] == 2  # scan_count
+        conn.close()
+
+
+def test_list_envelopes_zero_count_for_empty_envelope():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.upsert_envelope(conn, "88", "Cape Cod")
+        rows = tagger.list_envelopes(conn)
+        assert rows[0][2] == 0
         conn.close()
 
 

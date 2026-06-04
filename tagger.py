@@ -61,13 +61,42 @@ def _find_tiffs(dir_path):
 
 
 def upsert_envelope(conn, envelope_id, description=None):
-    """Create envelope if it doesn't exist. Description is set on insert only;
-    an existing description is never overwritten."""
-    conn.execute(
-        "INSERT OR IGNORE INTO envelopes (id, description) VALUES (?, ?)",
-        (envelope_id, description),
-    )
-    conn.commit()
+    """Create envelope if it doesn't exist; update description if one is provided.
+
+    Returns 'created', 'updated', or 'unchanged'.
+    """
+    existing = conn.execute(
+        "SELECT description FROM envelopes WHERE id = ?", (envelope_id,)
+    ).fetchone()
+
+    if existing is None:
+        conn.execute(
+            "INSERT INTO envelopes (id, description) VALUES (?, ?)",
+            (envelope_id, description),
+        )
+        conn.commit()
+        return "created"
+
+    if description is not None and description != existing[0]:
+        conn.execute(
+            "UPDATE envelopes SET description = ? WHERE id = ?",
+            (description, envelope_id),
+        )
+        conn.commit()
+        return "updated"
+
+    return "unchanged"
+
+
+def list_envelopes(conn):
+    """Return list of (id, description, scan_count) sorted by id."""
+    return conn.execute("""
+        SELECT e.id, e.description, COUNT(s.hash) AS scan_count
+        FROM envelopes e
+        LEFT JOIN scans s ON s.envelope_id = e.id
+        GROUP BY e.id
+        ORDER BY e.id
+    """).fetchall()
 
 
 def get_recent_pair(conn, scan_dir):

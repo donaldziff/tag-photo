@@ -22,11 +22,39 @@ def cmd_scan_dir(args):
         sys.exit(1)
     conn = tagger.init_db(args.archive)
     if args.envelope:
-        tagger.upsert_envelope(conn, args.envelope, args.envelope_desc)
+        result = tagger.upsert_envelope(conn, args.envelope, args.envelope_desc)
+        if result == "updated":
+            print(f"Updated envelope {args.envelope} description to: {args.envelope_desc}")
+        elif result == "created" and args.envelope_desc:
+            print(f"Created envelope {args.envelope}: {args.envelope_desc}")
     added = tagger.scan_directory(conn, args.archive, args.dir, envelope_id=args.envelope)
     conn.close()
     envelope_note = f" (envelope {args.envelope})" if args.envelope else ""
     print(f"Registered {added} new scan(s) from {args.dir}{envelope_note}")
+
+
+def cmd_update_envelope(args):
+    conn = tagger.init_db(args.archive)
+    result = tagger.upsert_envelope(conn, args.envelope, args.desc)
+    conn.close()
+    if result == "created":
+        print(f"Created envelope {args.envelope}: {args.desc}")
+    elif result == "updated":
+        print(f"Updated envelope {args.envelope}: {args.desc}")
+    else:
+        print(f"Envelope {args.envelope} description unchanged.")
+
+
+def cmd_list_envelopes(args):
+    conn = tagger.init_db(args.archive)
+    rows = tagger.list_envelopes(conn)
+    conn.close()
+    if not rows:
+        print("No envelopes found.")
+        return
+    for envelope_id, description, scan_count in rows:
+        desc_str = description or "(no description)"
+        print(f"  {envelope_id:>6}  {scan_count:>3} scan(s)  {desc_str}")
 
 
 def cmd_mark_verso(args):
@@ -72,7 +100,17 @@ def make_parser():
     p_scan.add_argument("-e", "--envelope", metavar="ENVELOPE_ID",
                         help="Envelope ID to assign to newly registered scans")
     p_scan.add_argument("--envelope-desc", metavar="DESCRIPTION",
-                        help="Description for the envelope (set on first use only)")
+                        help="Envelope description (always updated if provided)")
+
+    p_env = sub.add_parser("update-envelope", parents=[common],
+                            help="Set or correct an envelope description")
+    p_env.add_argument("-e", "--envelope", required=True, metavar="ENVELOPE_ID",
+                       help="Envelope ID")
+    p_env.add_argument("--desc", required=True, metavar="DESCRIPTION",
+                       help="New description")
+
+    sub.add_parser("list-envelopes", parents=[common],
+                   help="List all envelopes with scan counts")
 
     p_verso = sub.add_parser("mark-verso", parents=[common],
                               help="Pair the two most recently added scans as recto/verso")
@@ -88,6 +126,8 @@ def main():
     dispatch = {
         "init": cmd_init,
         "scan-dir": cmd_scan_dir,
+        "update-envelope": cmd_update_envelope,
+        "list-envelopes": cmd_list_envelopes,
         "mark-verso": cmd_mark_verso,
     }
     dispatch[args.command](args)
