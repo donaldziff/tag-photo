@@ -135,6 +135,8 @@ def ensure_thumbnail(archive_root, hash_val, scan_dir, filename):
     if not os.path.exists(cache_path):
         os.makedirs(_thumbs_dir(archive_root), exist_ok=True)
         img = Image.open(os.path.join(archive_root, scan_dir, filename))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         img.thumbnail((300, 400), Image.LANCZOS)
         img.save(cache_path, "JPEG", quality=75)
     return cache_path
@@ -147,6 +149,8 @@ def ensure_preview(archive_root, hash_val, scan_dir, filename):
     if not os.path.exists(cache_path):
         os.makedirs(_thumbs_dir(archive_root), exist_ok=True)
         img = Image.open(os.path.join(archive_root, scan_dir, filename))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
         img.thumbnail((1600, 1600), Image.LANCZOS)
         img.save(cache_path, "JPEG", quality=85)
     return cache_path
