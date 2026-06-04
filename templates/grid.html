@@ -33,9 +33,9 @@
 <div class="toolbar">
   <h2>
     {% if mode == 'tag' %}
-      {{ scans|length }} photo{{ scans|length|pluralize }} pending
+      {{ scans|length }} photo{{ 's' if scans|length != 1 else '' }} pending
     {% else %}
-      {{ scans|length }} photo{{ scans|length|pluralize }}
+      {{ scans|length }} photo{{ 's' if scans|length != 1 else '' }}
     {% endif %}
   </h2>
 </div>
