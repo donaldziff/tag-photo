@@ -611,6 +611,14 @@ def reopen_photo(conn, hash_val):
 # LLM usage metering
 # ---------------------------------------------------------------------------
 
+# USD per million tokens. Update if Anthropic pricing changes; unknown
+# models fall back to DEFAULT_PRICING_PER_MTOK.
+PRICING_PER_MTOK = {
+    "claude-sonnet-4-6": (3.00, 15.00),  # (input, output)
+}
+DEFAULT_PRICING_PER_MTOK = (3.00, 15.00)
+
+
 def record_llm_usage(conn, model, input_tokens, output_tokens):
     """Record one LLM API call's token usage."""
     conn.execute(
@@ -621,14 +629,31 @@ def record_llm_usage(conn, model, input_tokens, output_tokens):
 
 
 def get_llm_usage_summary(conn):
-    """Return aggregate LLM token usage as {calls, input_tokens, output_tokens}."""
-    row = conn.execute("""
-        SELECT COUNT(*) AS calls,
+    """Return aggregate LLM usage as {calls, input_tokens, output_tokens, cost_usd}.
+
+    cost_usd is an estimate based on PRICING_PER_MTOK.
+    """
+    rows = conn.execute("""
+        SELECT model,
+               COUNT(*) AS calls,
                COALESCE(SUM(input_tokens), 0) AS input_tokens,
                COALESCE(SUM(output_tokens), 0) AS output_tokens
         FROM llm_usage
-    """).fetchone()
-    return dict(row)
+        GROUP BY model
+    """).fetchall()
+
+    cost_usd = 0.0
+    for row in rows:
+        in_price, out_price = PRICING_PER_MTOK.get(row["model"], DEFAULT_PRICING_PER_MTOK)
+        cost_usd += row["input_tokens"] / 1_000_000 * in_price
+        cost_usd += row["output_tokens"] / 1_000_000 * out_price
+
+    return {
+        "calls": sum(row["calls"] for row in rows),
+        "input_tokens": sum(row["input_tokens"] for row in rows),
+        "output_tokens": sum(row["output_tokens"] for row in rows),
+        "cost_usd": cost_usd,
+    }
 
 
 # ---------------------------------------------------------------------------

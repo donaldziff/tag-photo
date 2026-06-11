@@ -796,7 +796,7 @@ def test_get_llm_usage_summary_empty():
     with tempfile.TemporaryDirectory() as d:
         conn, _ = open_archive(d)
         summary = tagger.get_llm_usage_summary(conn)
-        assert summary == {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+        assert summary == pytest.approx({"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
         conn.close()
 
 
@@ -806,7 +806,11 @@ def test_record_llm_usage_accumulates():
         tagger.record_llm_usage(conn, "claude-sonnet-4-6", 100, 20)
         tagger.record_llm_usage(conn, "claude-sonnet-4-6", 50, 10)
         summary = tagger.get_llm_usage_summary(conn)
-        assert summary == {"calls": 2, "input_tokens": 150, "output_tokens": 30}
+        # cost: 150 in @ $3/MTok + 30 out @ $15/MTok
+        expected_cost = 150 / 1_000_000 * 3.00 + 30 / 1_000_000 * 15.00
+        assert summary == pytest.approx(
+            {"calls": 2, "input_tokens": 150, "output_tokens": 30, "cost_usd": expected_cost}
+        )
         conn.close()
 
 
@@ -826,7 +830,10 @@ def test_make_anthropic_llm_fn_records_usage_when_conn_given():
 
         assert result == '{"ok": true}'
         summary = tagger.get_llm_usage_summary(conn)
-        assert summary == {"calls": 1, "input_tokens": 123, "output_tokens": 45}
+        expected_cost = 123 / 1_000_000 * 3.00 + 45 / 1_000_000 * 15.00
+        assert summary == pytest.approx(
+            {"calls": 1, "input_tokens": 123, "output_tokens": 45, "cost_usd": expected_cost}
+        )
         conn.close()
 
 
@@ -845,5 +852,5 @@ def test_make_anthropic_llm_fn_skips_usage_without_conn():
             llm_fn("describe this photo")
 
         summary = tagger.get_llm_usage_summary(conn)
-        assert summary == {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+        assert summary == pytest.approx({"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0})
         conn.close()
