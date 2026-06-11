@@ -9,7 +9,6 @@
   /* Card */
   .card { position:relative; background:#fff; border:1px solid #ddd; border-radius:6px; overflow:hidden;
           transition:box-shadow .15s; }
-  .card:hover { box-shadow:0 2px 8px rgba(0,0,0,.15); }
   .card.selected { outline:3px solid #2563eb; outline-offset:-2px; }
   .card a { display:block; text-decoration:none; color:inherit; }
   .card img { width:100%; display:block; aspect-ratio:3/4; object-fit:cover; background:#e8e8e8; }
@@ -27,12 +26,23 @@
     cursor:pointer; opacity:0; transition:opacity .12s;
     flex-shrink:0;
   }
-  .card:hover .card-check,
   .card.selected .card-check,
   .any-selected .card-check { opacity:1; }
   .card.selected .card-check { background:#2563eb; border-color:#2563eb; }
   .card-check svg { display:none; }
   .card.selected .card-check svg { display:block; }
+
+  /* Hover-capable devices (mouse/trackpad): reveal checkbox + shadow on hover.
+     Touch devices: keep the checkbox always visible so a single tap on the
+     photo navigates straight to the detail page (avoids iOS's "first tap
+     triggers :hover" behavior). */
+  @media (hover: hover) {
+    .card:hover { box-shadow:0 2px 8px rgba(0,0,0,.15); }
+    .card:hover .card-check { opacity:1; }
+  }
+  @media (hover: none) {
+    .card-check { opacity:1; }
+  }
 
   /* Selection bar */
   .sel-bar {
