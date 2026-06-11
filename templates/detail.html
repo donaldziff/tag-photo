@@ -182,8 +182,17 @@
         <label>Date source</label>
         <select name="date_source">
           <option value="">—</option>
-          {% for src in ['verso_text','verso_image','recto_stamp','llm_guess','manual'] %}
+          {% for src in ['verso_text','verso_image','recto_stamp','visual_cues','llm_guess','manual'] %}
           <option value="{{ src }}" {% if scan['date_source'] == src %}selected{% endif %}>{{ src }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Date confidence</label>
+        <select name="date_confidence">
+          <option value="">—</option>
+          {% for conf in ['high','medium','low'] %}
+          <option value="{{ conf }}" {% if scan['date_confidence'] == conf %}selected{% endif %}>{{ conf }}</option>
           {% endfor %}
         </select>
       </div>
@@ -241,6 +250,13 @@
       <div class="readonly-val {% if not scan['date_inferred'] %}empty{% endif %}">
         {{ scan['date_inferred'] or 'none' }}
         {% if scan['date_source'] %}<span style="color:#aaa; font-size:11px;">({{ scan['date_source'] }})</span>{% endif %}
+        {% if scan['date_confidence'] %}
+          {% if scan['date_confidence'] in ['high','medium','low'] %}
+          <span class="badge badge-confidence-{{ scan['date_confidence'] }}">{{ scan['date_confidence'] }}</span>
+          {% else %}
+          <span style="color:#aaa; font-size:11px;">{{ scan['date_confidence'] }}</span>
+          {% endif %}
+        {% endif %}
       </div>
     </div>
     {% if not safe_mode %}

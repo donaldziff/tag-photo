@@ -366,6 +366,7 @@ def _accept_form(db, hash_val):
         recto_stamp_text=request.form.get("recto_stamp_text") or None,
         date_inferred=request.form.get("date_inferred") or None,
         date_source=request.form.get("date_source") or None,
+        date_confidence=request.form.get("date_confidence") or None,
         envelope_id=request.form.get("envelope_id") or None,
     )
 
@@ -533,11 +534,14 @@ def extract_verso(scan_dir, hash_val):
 def infer_date(scan_dir, hash_val):
     db = get_db()
     scan = tagger.get_scan(db, hash_val)
+    preview_path = tagger.ensure_preview(
+        app.config["ARCHIVE_ROOT"], scan["hash"], scan["scan_dir"], scan["filename"]
+    )
     llm_fn = tagger.make_anthropic_llm_fn()
-    result = tagger.infer_date(llm_fn, scan["verso_text"], scan["recto_stamp_text"])
+    result = tagger.infer_date(llm_fn, preview_path, scan["verso_text"], scan["recto_stamp_text"])
     db.execute(
-        "UPDATE scans SET date_inferred=?, date_source=? WHERE hash=?",
-        (result.get("date"), result.get("date_source"), hash_val),
+        "UPDATE scans SET date_inferred=?, date_source=?, date_confidence=? WHERE hash=?",
+        (result.get("date"), result.get("date_source"), result.get("date_confidence"), hash_val),
     )
     db.commit()
     return redirect(request.referrer or url_for("browse_detail", scan_dir=scan_dir, hash_val=hash_val))

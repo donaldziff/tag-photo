@@ -39,6 +39,10 @@ def _ensure_schema(conn):
             uploaded_at      TEXT
         );
     """)
+    try:
+        conn.execute("ALTER TABLE scans ADD COLUMN date_confidence TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     conn.commit()
 
 
@@ -538,7 +542,7 @@ def scan_directory(conn, archive_root, scan_dir, envelope_id=None):
 
 def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None,
                  recto_stamp_text=None, date_inferred=None, date_source=None,
-                 envelope_id=None):
+                 date_confidence=None, envelope_id=None):
     """Save metadata, write EXIF to the TIFF, and mark the photo REVIEWED.
 
     If the photo was EXPORTED or UPLOADED, clears jpeg_path and uploaded_at.
@@ -549,11 +553,11 @@ def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None
     conn.execute("""
         UPDATE scans SET
             description=?, verso_text=?, recto_stamp_text=?,
-            date_inferred=?, date_source=?, envelope_id=?,
+            date_inferred=?, date_source=?, date_confidence=?, envelope_id=?,
             state='REVIEWED', uploaded_at=NULL
         WHERE hash=?
     """, (description, verso_text, recto_stamp_text,
-          date_inferred, date_source, envelope_id, hash_val))
+          date_inferred, date_source, date_confidence, envelope_id, hash_val))
     if was_exported:
         conn.execute("UPDATE scans SET jpeg_path=NULL WHERE hash=?", (hash_val,))
     conn.commit()
@@ -650,20 +654,31 @@ def extract_verso_text(llm_fn, image_path):
     return json.loads(raw).get("verso_text")
 
 
-def infer_date(llm_fn, verso_text=None, recto_stamp_text=None):
-    """Return {date, date_source, reasoning} inferred from available text clues."""
+def infer_date(llm_fn, image_path=None, verso_text=None, recto_stamp_text=None):
+    """Return {date, date_source, date_confidence} inferred from available clues."""
     parts = []
     if verso_text:
         parts.append(f"Text written/printed on back of photo:\n{verso_text}")
     if recto_stamp_text:
         parts.append(f"Text printed on front border by photo lab:\n{recto_stamp_text}")
+    if image_path:
+        parts.append(
+            "An image of the photo itself is attached. If text clues don't pin down "
+            "the date, estimate based on visual cues in the photo (clothing, hairstyles, "
+            "photo paper/border style, color processing, image quality, etc.)."
+        )
     prompt = (
         "Based on the following clues from a physical photograph, estimate when it was taken.\n\n"
         + "\n\n".join(parts)
         + "\n\nReturn JSON with:\n"
         '- "date": best estimate as YYYY, YYYY-MM, or YYYY-MM-DD (null if truly unknown)\n'
-        '- "date_source": one of "verso_text", "recto_stamp", "llm_guess"\n'
-        '- "reasoning": one short sentence explaining the estimate'
+        '- "date_source": one of "verso_text", "recto_stamp", "visual_cues", "llm_guess"\n'
+        '- "date_confidence": one of "high", "medium", "low"'
     )
-    raw = parse_with_llm(llm_fn, prompt)
-    return json.loads(raw)
+    raw = parse_with_llm(llm_fn, prompt, image_path)
+    result = json.loads(raw)
+    return {
+        "date": result.get("date"),
+        "date_source": result.get("date_source"),
+        "date_confidence": result.get("date_confidence"),
+    }

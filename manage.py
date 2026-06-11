@@ -104,7 +104,7 @@ def cmd_prune_dir(args):
 
         # Transfer non-null metadata from stale to live if live is missing it
         fields = ("verso_hash", "envelope_id", "description", "verso_text",
-                  "recto_stamp_text", "date_inferred", "date_source",
+                  "recto_stamp_text", "date_inferred", "date_source", "date_confidence",
                   "jpeg_path", "uploaded_at")
         updates = {f: stale[f] for f in fields if stale[f] is not None and live[f] is None}
         # Prefer stale state if it carries more meaning than PENDING
