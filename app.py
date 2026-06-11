@@ -645,12 +645,19 @@ def main():
                         help="Bind address (use 0.0.0.0 to allow access from other devices on the LAN)")
     parser.add_argument("--safe", action="store_true",
                         help="Read-only mode: disable all writes")
+    parser.add_argument("--ssl-cert", help="Path to a TLS certificate file (enables HTTPS)")
+    parser.add_argument("--ssl-key", help="Path to the TLS certificate's private key")
     args = parser.parse_args()
     app.config["ARCHIVE_ROOT"] = os.path.expanduser(args.archive)
     app.config["SAFE_MODE"] = args.safe
     if args.safe:
         print("Safe mode: all writes disabled.")
-    app.run(debug=True, host=args.host, port=args.port)
+    ssl_context = None
+    if args.ssl_cert and args.ssl_key:
+        ssl_context = (os.path.expanduser(args.ssl_cert), os.path.expanduser(args.ssl_key))
+    elif args.ssl_cert or args.ssl_key:
+        parser.error("--ssl-cert and --ssl-key must be provided together")
+    app.run(debug=True, host=args.host, port=args.port, ssl_context=ssl_context)
 
 
 if __name__ == "__main__":
