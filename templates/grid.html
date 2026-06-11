@@ -86,6 +86,11 @@
   <a href="{{ url_for('browse_grid', scan_dir=scope.scan_dir) }}"
      {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
   <span class="sep">|</span>
+  {% set dir_idx = scan_dirs.index(scope.scan_dir) %}
+  {% if dir_idx > 0 %}
+  <a href="{{ url_for('tag_grid' if mode=='tag' else 'browse_grid', scan_dir=scan_dirs[dir_idx - 1]) }}"
+     title="{{ scan_dirs[dir_idx - 1] }}">← Dir</a>
+  {% endif %}
   <select onchange="window.location=this.value"
           style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
                  padding:2px 6px;font-size:12px;cursor:pointer;">
@@ -94,6 +99,10 @@
             {% if dir == scope.scan_dir %}selected{% endif %}>{{ dir }}</option>
     {% endfor %}
   </select>
+  {% if dir_idx < scan_dirs|length - 1 %}
+  <a href="{{ url_for('tag_grid' if mode=='tag' else 'browse_grid', scan_dir=scan_dirs[dir_idx + 1]) }}"
+     title="{{ scan_dirs[dir_idx + 1] }}">Dir →</a>
+  {% endif %}
   {% elif scope.type == 'envelope' %}
   <a href="{{ url_for('envelope_tag_grid', envelope_id=scope.envelope_id) }}"
      {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>

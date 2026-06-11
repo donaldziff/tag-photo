@@ -761,13 +761,15 @@ def test_accept_photo_saves_metadata_and_sets_reviewed():
             tagger.accept_photo(conn, h, archive,
                                 description="Family at beach",
                                 date_inferred="1972-07",
-                                date_source="manual")
+                                date_source="manual",
+                                subjects="Mom, Dad, Charlie")
 
         row = conn.execute("SELECT * FROM scans WHERE hash=?", (h,)).fetchone()
         assert row["state"] == "REVIEWED"
         assert row["description"] == "Family at beach"
         assert row["date_inferred"] == "1972-07"
         assert row["date_source"] == "manual"
+        assert row["subjects"] == "Mom, Dad, Charlie"
         conn.close()
 
 
@@ -785,4 +787,63 @@ def test_accept_photo_clears_jpeg_path_when_exported():
 
         row = conn.execute("SELECT jpeg_path FROM scans WHERE hash=?", (h,)).fetchone()
         assert row["jpeg_path"] is None
+        conn.close()
+
+
+# --- LLM usage metering ---
+
+def test_get_llm_usage_summary_empty():
+    with tempfile.TemporaryDirectory() as d:
+        conn, _ = open_archive(d)
+        summary = tagger.get_llm_usage_summary(conn)
+        assert summary == {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+        conn.close()
+
+
+def test_record_llm_usage_accumulates():
+    with tempfile.TemporaryDirectory() as d:
+        conn, _ = open_archive(d)
+        tagger.record_llm_usage(conn, "claude-sonnet-4-6", 100, 20)
+        tagger.record_llm_usage(conn, "claude-sonnet-4-6", 50, 10)
+        summary = tagger.get_llm_usage_summary(conn)
+        assert summary == {"calls": 2, "input_tokens": 150, "output_tokens": 30}
+        conn.close()
+
+
+def test_make_anthropic_llm_fn_records_usage_when_conn_given():
+    with tempfile.TemporaryDirectory() as d:
+        conn, _ = open_archive(d)
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"ok": true}')]
+        mock_response.usage = MagicMock(input_tokens=123, output_tokens=45)
+        mock_client.messages.create.return_value = mock_response
+
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            llm_fn = tagger.make_anthropic_llm_fn(conn=conn)
+            result = llm_fn("describe this photo")
+
+        assert result == '{"ok": true}'
+        summary = tagger.get_llm_usage_summary(conn)
+        assert summary == {"calls": 1, "input_tokens": 123, "output_tokens": 45}
+        conn.close()
+
+
+def test_make_anthropic_llm_fn_skips_usage_without_conn():
+    with tempfile.TemporaryDirectory() as d:
+        conn, _ = open_archive(d)
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text='{"ok": true}')]
+        mock_response.usage = MagicMock(input_tokens=123, output_tokens=45)
+        mock_client.messages.create.return_value = mock_response
+
+        with patch("anthropic.Anthropic", return_value=mock_client):
+            llm_fn = tagger.make_anthropic_llm_fn()
+            llm_fn("describe this photo")
+
+        summary = tagger.get_llm_usage_summary(conn)
+        assert summary == {"calls": 0, "input_tokens": 0, "output_tokens": 0}
         conn.close()

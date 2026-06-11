@@ -33,6 +33,12 @@
                       font-size:12px; font-family:inherit; margin-bottom:6px; }
   .edit-form input:focus { outline:none; border-color:#2563eb; }
   .edit-actions { display:flex; gap:6px; }
+
+  .empty-toggle { font-size:12px; color:#666; display:flex; align-items:center;
+                  gap:6px; cursor:pointer; margin-bottom:14px; }
+  .empty-toggle input { cursor:pointer; }
+  .env-card.env-empty { display:none; }
+  body.show-empty .env-card.env-empty { display:block; }
 </style>
 {% endblock %}
 {% block content %}
@@ -67,9 +73,19 @@
 </div>
 
 {% if envelopes %}
+{% set empty_count = namespace(n=0) %}
+{% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes %}
+  {% if scan_count == 0 %}{% set empty_count.n = empty_count.n + 1 %}{% endif %}
+{% endfor %}
+{% if empty_count.n %}
+<label class="empty-toggle">
+  <input type="checkbox" id="show-empty" onchange="toggleEmpty(this.checked)">
+  Show empty envelopes ({{ empty_count.n }})
+</label>
+{% endif %}
 <div class="env-grid">
   {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes %}
-  <div class="env-card">
+  <div class="env-card{% if scan_count == 0 %} env-empty{% endif %}">
     {% if sample_hash %}
     <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}">
       <img class="env-thumb" src="{{ url_for('thumbnail', hash_val=sample_hash) }}"
@@ -133,5 +149,18 @@ function cancelEdit(id) {
   document.getElementById('desc-display-' + id).style.display = 'block';
   document.querySelector(`[data-env="${id}"]`).style.display = '';
 }
+
+function toggleEmpty(checked) {
+  document.body.classList.toggle('show-empty', checked);
+  localStorage.setItem('showEmptyEnvelopes', checked ? '1' : '0');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const cb = document.getElementById('show-empty');
+  if (cb) {
+    const show = localStorage.getItem('showEmptyEnvelopes') === '1';
+    cb.checked = show;
+    document.body.classList.toggle('show-empty', show);
+  }
+});
 </script>
 {% endblock %}

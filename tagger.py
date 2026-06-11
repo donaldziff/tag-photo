@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import time
+from datetime import datetime, timezone
 
 
 def init_db(archive_root):
@@ -38,9 +39,21 @@ def _ensure_schema(conn):
             jpeg_path        TEXT,
             uploaded_at      TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp     TEXT NOT NULL,
+            model         TEXT NOT NULL,
+            input_tokens  INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL
+        );
     """)
     try:
         conn.execute("ALTER TABLE scans ADD COLUMN date_confidence TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE scans ADD COLUMN subjects TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
     conn.commit()
@@ -269,10 +282,14 @@ def list_envelopes(conn):
 
 
 def get_envelopes_with_thumbnails(conn):
-    """Return list of (id, description, scan_count, pending_count, sample_hash)."""
+    """Return list of (id, description, scan_count, pending_count, sample_hash).
+
+    scan_count counts rectos only, so envelopes containing only an unpaired
+    verso are treated as empty (no browsable photos, no thumbnail).
+    """
     rows = conn.execute("""
         SELECT e.id, e.description,
-               COUNT(s.hash) AS scan_count,
+               COALESCE(SUM(CASE WHEN s.is_verso=0 THEN 1 ELSE 0 END), 0) AS scan_count,
                SUM(CASE WHEN s.state='PENDING' AND s.is_verso=0 THEN 1 ELSE 0 END) AS pending_count,
                MIN(CASE WHEN s.is_verso=0 THEN s.hash END) AS sample_hash
         FROM envelopes e
@@ -542,7 +559,7 @@ def scan_directory(conn, archive_root, scan_dir, envelope_id=None):
 
 def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None,
                  recto_stamp_text=None, date_inferred=None, date_source=None,
-                 date_confidence=None, envelope_id=None):
+                 date_confidence=None, envelope_id=None, subjects=None):
     """Save metadata, write EXIF to the TIFF, and mark the photo REVIEWED.
 
     If the photo was EXPORTED or UPLOADED, clears jpeg_path and uploaded_at.
@@ -554,10 +571,11 @@ def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None
         UPDATE scans SET
             description=?, verso_text=?, recto_stamp_text=?,
             date_inferred=?, date_source=?, date_confidence=?, envelope_id=?,
+            subjects=?,
             state='REVIEWED', uploaded_at=NULL
         WHERE hash=?
     """, (description, verso_text, recto_stamp_text,
-          date_inferred, date_source, date_confidence, envelope_id, hash_val))
+          date_inferred, date_source, date_confidence, envelope_id, subjects, hash_val))
     if was_exported:
         conn.execute("UPDATE scans SET jpeg_path=NULL WHERE hash=?", (hash_val,))
     conn.commit()
@@ -590,10 +608,34 @@ def reopen_photo(conn, hash_val):
 
 
 # ---------------------------------------------------------------------------
+# LLM usage metering
+# ---------------------------------------------------------------------------
+
+def record_llm_usage(conn, model, input_tokens, output_tokens):
+    """Record one LLM API call's token usage."""
+    conn.execute(
+        "INSERT INTO llm_usage (timestamp, model, input_tokens, output_tokens) VALUES (?, ?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), model, input_tokens, output_tokens),
+    )
+    conn.commit()
+
+
+def get_llm_usage_summary(conn):
+    """Return aggregate LLM token usage as {calls, input_tokens, output_tokens}."""
+    row = conn.execute("""
+        SELECT COUNT(*) AS calls,
+               COALESCE(SUM(input_tokens), 0) AS input_tokens,
+               COALESCE(SUM(output_tokens), 0) AS output_tokens
+        FROM llm_usage
+    """).fetchone()
+    return dict(row)
+
+
+# ---------------------------------------------------------------------------
 # LLM inference
 # ---------------------------------------------------------------------------
 
-def make_anthropic_llm_fn(model="claude-sonnet-4-6"):
+def make_anthropic_llm_fn(model="claude-sonnet-4-6", conn=None):
     import anthropic
     import base64
     client = anthropic.Anthropic()
@@ -614,6 +656,8 @@ def make_anthropic_llm_fn(model="claude-sonnet-4-6"):
             model=model, max_tokens=1024,
             messages=[{"role": "user", "content": content}]
         )
+        if conn is not None:
+            record_llm_usage(conn, model, msg.usage.input_tokens, msg.usage.output_tokens)
         return msg.content[0].text
 
     return llm_fn

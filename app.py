@@ -44,6 +44,7 @@ def inject_globals():
         "scan_dirs": tagger.get_scan_dirs(db),
         "archive_name": os.path.basename(app.config["ARCHIVE_ROOT"]),
         "all_envelopes": tagger.list_envelopes(db),
+        "llm_usage": tagger.get_llm_usage_summary(db),
     }
 
 
@@ -368,6 +369,7 @@ def _accept_form(db, hash_val):
         date_source=request.form.get("date_source") or None,
         date_confidence=request.form.get("date_confidence") or None,
         envelope_id=request.form.get("envelope_id") or None,
+        subjects=request.form.get("subjects") or None,
     )
 
 
@@ -523,7 +525,7 @@ def extract_verso(scan_dir, hash_val):
     preview_path = tagger.ensure_preview(
         app.config["ARCHIVE_ROOT"], verso["hash"], verso["scan_dir"], verso["filename"]
     )
-    llm_fn = tagger.make_anthropic_llm_fn()
+    llm_fn = tagger.make_anthropic_llm_fn(conn=db)
     verso_text = tagger.extract_verso_text(llm_fn, preview_path)
     db.execute("UPDATE scans SET verso_text=? WHERE hash=?", (verso_text or "", hash_val))
     db.commit()
@@ -537,7 +539,7 @@ def infer_date(scan_dir, hash_val):
     preview_path = tagger.ensure_preview(
         app.config["ARCHIVE_ROOT"], scan["hash"], scan["scan_dir"], scan["filename"]
     )
-    llm_fn = tagger.make_anthropic_llm_fn()
+    llm_fn = tagger.make_anthropic_llm_fn(conn=db)
     result = tagger.infer_date(llm_fn, preview_path, scan["verso_text"], scan["recto_stamp_text"])
     db.execute(
         "UPDATE scans SET date_inferred=?, date_source=?, date_confidence=? WHERE hash=?",
@@ -586,6 +588,8 @@ def main():
     parser = argparse.ArgumentParser(description="Photo tagging web UI")
     parser.add_argument("-a", "--archive", required=True, metavar="ARCHIVE_ROOT")
     parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Bind address (use 0.0.0.0 to allow access from other devices on the LAN)")
     parser.add_argument("--safe", action="store_true",
                         help="Read-only mode: disable all writes")
     args = parser.parse_args()
@@ -593,7 +597,7 @@ def main():
     app.config["SAFE_MODE"] = args.safe
     if args.safe:
         print("Safe mode: all writes disabled.")
-    app.run(debug=True, port=args.port)
+    app.run(debug=True, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,13 @@
   <a href="{{ url_for('index') }}" class="brand" style="text-decoration:none; color:inherit;">{{ archive_name }}</a>
   <a href="{{ url_for('envelopes_index') }}" style="color:#999; font-size:13px; text-decoration:none;">Envelopes</a>
   {% block nav %}{% endblock %}
+  {% if llm_usage.calls %}
+  <span class="sep">|</span>
+  <span style="color:#999; font-size:12px;"
+        title="{{ llm_usage.calls }} LLM call(s) — {{ '{:,}'.format(llm_usage.input_tokens) }} in / {{ '{:,}'.format(llm_usage.output_tokens) }} out tokens">
+    LLM: {{ '{:,}'.format(llm_usage.input_tokens + llm_usage.output_tokens) }} tok
+  </span>
+  {% endif %}
   {% if safe_mode %}
   <span style="margin-left:auto; background:#7c3aed; color:#fff; font-size:11px;
                font-weight:700; padding:3px 10px; border-radius:10px; letter-spacing:.5px;">

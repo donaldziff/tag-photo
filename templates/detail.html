@@ -3,7 +3,6 @@
 {% block head %}
 <style>
   .page { display:grid; grid-template-columns:1fr 340px; gap:20px; align-items:start; }
-  @media (max-width:900px) { .page { grid-template-columns:1fr; } }
 
   .images { display:flex; gap:12px; align-items:flex-start;
             position:sticky; top:20px; }
@@ -54,6 +53,13 @@
               margin-bottom:2px; }
   .exif-key { color:#aaa; min-width:100px; flex-shrink:0; }
   .exif-val { color:#555; word-break:break-all; }
+
+  @media (max-width:900px) {
+    .page { grid-template-columns:1fr; }
+    .images { position:static; flex-direction:column; }
+    .img-recto img { max-height:60vh; }
+    .img-verso { flex:0 0 auto; max-width:280px; margin:0 auto; }
+  }
 </style>
 {% endblock %}
 {% block nav %}
@@ -88,6 +94,7 @@
     <span style="font-size:13px; color:#555; margin-left:8px;">{{ scan['filename'] }}</span>
   </div>
   <div class="nav-links">
+    <a href="{{ urls.tag_grid if mode == 'tag' else urls.browse_grid }}" class="btn btn-sm">← {{ scope.label }}</a>
     {% if urls.prev %}
     <a id="nav-prev" href="{{ urls.prev }}" class="btn btn-sm">← Prev</a>
     {% endif %}
@@ -166,6 +173,11 @@
         <textarea name="description">{{ scan['description'] or '' }}</textarea>
       </div>
       <div class="field">
+        <label>Subjects</label>
+        <input type="text" name="subjects" value="{{ scan['subjects'] or '' }}"
+               placeholder="e.g. Mom, Dad, Charlie">
+      </div>
+      <div class="field">
         <label>Verso text</label>
         <textarea name="verso_text">{{ scan['verso_text'] or '' }}</textarea>
       </div>
@@ -234,6 +246,11 @@
       <label>Description</label>
       <div class="readonly-val {% if not scan['description'] %}empty{% endif %}">
         {{ scan['description'] or 'none' }}</div>
+    </div>
+    <div class="field">
+      <label>Subjects</label>
+      <div class="readonly-val {% if not scan['subjects'] %}empty{% endif %}">
+        {{ scan['subjects'] or 'none' }}</div>
     </div>
     <div class="field">
       <label>Verso text</label>
@@ -319,5 +336,29 @@ document.addEventListener('keydown', e => {
   if (e.key === 'ArrowLeft') { const a = document.getElementById('nav-prev'); if (a) a.click(); }
   if (e.key === 'ArrowRight') { const a = document.getElementById('nav-next'); if (a) a.click(); }
 });
+
+// Swipe left/right on the images to go to next/prev photo.
+(() => {
+  const images = document.querySelector('.images');
+  if (!images) return;
+  let startX = 0, startY = 0, startTime = 0;
+  images.addEventListener('touchstart', e => {
+    const t = e.changedTouches[0];
+    startX = t.clientX;
+    startY = t.clientY;
+    startTime = Date.now();
+  }, { passive: true });
+  images.addEventListener('touchend', e => {
+    if (document.getElementById('lightbox').classList.contains('visible')) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    const dt = Date.now() - startTime;
+    if (dt < 600 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      const a = document.getElementById(dx < 0 ? 'nav-next' : 'nav-prev');
+      if (a) a.click();
+    }
+  }, { passive: true });
+})();
 </script>
 {% endblock %}
