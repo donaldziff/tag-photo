@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Envelopes — {{ archive_name }}{% endblock %}
+{% block nav %}<span style="color:#fff; font-weight:600;">Envelopes</span>{% endblock %}
+{% block head %}
+<style>
+  .add-envelope {
+    background:#fff; border:1px solid #ddd; border-radius:8px;
+    padding:16px 20px; margin-bottom:24px; display:flex;
+    gap:12px; align-items:flex-end; flex-wrap:wrap;
+  }
+  .add-envelope .field { display:flex; flex-direction:column; gap:4px; }
+  .add-envelope label { font-size:11px; font-weight:600; text-transform:uppercase;
+                         letter-spacing:.5px; color:#777; }
+  .add-envelope input { padding:6px 8px; border:1px solid #ddd; border-radius:4px;
+                         font-size:13px; font-family:inherit; background:#fafafa; }
+  .add-envelope input:focus { outline:none; border-color:#2563eb; background:#fff; }
+
+  .env-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:14px; }
+  .env-card { background:#fff; border:1px solid #ddd; border-radius:8px; overflow:hidden; }
+  .env-thumb { width:100%; aspect-ratio:3/4; object-fit:cover; background:#e8e8e8;
+                display:block; text-decoration:none; }
+  .env-thumb-placeholder { width:100%; aspect-ratio:3/4; background:#f0f0f0;
+                             display:flex; align-items:center; justify-content:center;
+                             color:#ccc; font-size:32px; }
+  .env-body { padding:10px 12px; }
+  .env-id { font-size:20px; font-weight:700; color:#222; line-height:1.2; }
+  .env-desc { font-size:12px; color:#666; margin-top:3px; min-height:16px;
+               word-break:break-word; }
+  .env-count { font-size:11px; color:#aaa; margin-top:5px; }
+  .env-actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; align-items:center; }
+  .edit-form { margin-top:10px; display:none; }
+  .edit-form input { width:100%; padding:5px 8px; border:1px solid #ddd; border-radius:4px;
+                      font-size:12px; font-family:inherit; margin-bottom:6px; }
+  .edit-form input:focus { outline:none; border-color:#2563eb; }
+  .edit-actions { display:flex; gap:6px; }
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="add-envelope">
+  <form method="POST" action="{{ url_for('envelope_new') }}"
+        style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+    <div class="field">
+      <label>ID</label>
+      <input type="text" name="id" placeholder="e.g. 88" required
+             style="width:80px;" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <input type="text" name="description" placeholder="e.g. Mom's side, Cape Cod 1960s"
+             style="width:280px;" autocomplete="off">
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add envelope</button>
+  </form>
+</div>
+
+<div style="margin-bottom:20px;">
+  <a href="{{ url_for('unassigned_browse_grid') }}" class="btn">
+    No envelope
+    <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ unassigned_count }})</span>
+  </a>
+  {% if unassigned_pending %}
+  <a href="{{ url_for('unassigned_tag_grid') }}" class="btn btn-sm" style="margin-left:6px;">
+    Tag ({{ unassigned_pending }})
+  </a>
+  {% endif %}
+</div>
+
+{% if envelopes %}
+<div class="env-grid">
+  {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes %}
+  <div class="env-card">
+    {% if sample_hash %}
+    <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}">
+      <img class="env-thumb" src="{{ url_for('thumbnail', hash_val=sample_hash) }}"
+           loading="lazy" alt="{{ env_id }}">
+    </a>
+    {% else %}
+    <div class="env-thumb-placeholder">?</div>
+    {% endif %}
+    <div class="env-body">
+      <div class="env-id">{{ env_id }}</div>
+      <div class="env-desc" id="desc-display-{{ env_id }}">{{ env_desc or '—' }}</div>
+      <div class="env-count">
+        {{ scan_count }} photo{{ 's' if scan_count != 1 else '' }}
+        {% if pending_count %}<span style="color:#92400e;"> · {{ pending_count }} pending</span>{% endif %}
+      </div>
+      <div class="env-actions">
+        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}"
+           class="btn btn-sm btn-primary">Tag</a>
+        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}"
+           class="btn btn-sm">Browse</a>
+        {% if not safe_mode %}
+        <button class="btn btn-sm"
+                data-env="{{ env_id }}"
+                data-desc="{{ env_desc or '' }}"
+                onclick="startEdit(this)">Edit</button>
+        {% endif %}
+      </div>
+      {% if not safe_mode %}
+      <div class="edit-form" id="edit-form-{{ env_id }}">
+        <form method="POST" action="{{ url_for('envelope_update', envelope_id=env_id) }}">
+          <input type="text" name="description" id="edit-input-{{ env_id }}"
+                 placeholder="Description">
+          <div class="edit-actions">
+            <button type="submit" class="btn btn-sm btn-primary">Save</button>
+            <button type="button" class="btn btn-sm"
+                    onclick="cancelEdit('{{ env_id }}')">Cancel</button>
+          </div>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p style="color:#888; margin-top:40px;">No envelopes yet.</p>
+{% endif %}
+
+<script>
+function startEdit(btn) {
+  const id = btn.dataset.env;
+  const desc = btn.dataset.desc;
+  document.getElementById('edit-input-' + id).value = desc === '—' ? '' : desc;
+  document.getElementById('edit-form-' + id).style.display = 'block';
+  document.getElementById('desc-display-' + id).style.display = 'none';
+  btn.style.display = 'none';
+  document.getElementById('edit-input-' + id).focus();
+}
+function cancelEdit(id) {
+  document.getElementById('edit-form-' + id).style.display = 'none';
+  document.getElementById('desc-display-' + id).style.display = 'block';
+  document.querySelector(`[data-env="${id}"]`).style.display = '';
+}
+</script>
+{% endblock %}

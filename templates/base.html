@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}JFZ Tagger{% endblock %}</title>
+  <title>{% block title %}{{ archive_name }}{% endblock %}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 14px;
            background: #f0f0f0; color: #222; }
     nav { background: #1a1a1a; color: #fff; padding: 10px 20px;
           display: flex; align-items: center; gap: 20px; }
-    nav .brand { font-weight: 700; font-size: 15px; }
+    nav .brand { font-weight: 700; font-size: 20px; }
     nav a { color: #999; text-decoration: none; font-size: 13px; }
     nav a:hover { color: #fff; }
     nav .sep { color: #444; }
@@ -31,7 +31,6 @@
              font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
     .badge-pending       { background: #fef3c7; color: #92400e; }
     .badge-reviewed      { background: #d1fae5; color: #065f46; }
-    .badge-skipped       { background: #f3f4f6; color: #6b7280; }
     .badge-exported      { background: #dbeafe; color: #1e40af; }
     .badge-uploaded      { background: #ede9fe; color: #5b21b6; }
     .badge-needs_pairing { background: #fee2e2; color: #991b1b; }
@@ -40,7 +39,8 @@
 </head>
 <body>
 <nav>
-  <span class="brand">JFZ Tagger</span>
+  <a href="{{ url_for('index') }}" class="brand" style="text-decoration:none; color:inherit;">{{ archive_name }}</a>
+  <a href="{{ url_for('envelopes_index') }}" style="color:#999; font-size:13px; text-decoration:none;">Envelopes</a>
   {% block nav %}{% endblock %}
   {% if safe_mode %}
   <span style="margin-left:auto; background:#7c3aed; color:#fff; font-size:11px;

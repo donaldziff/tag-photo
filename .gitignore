@@ -11,6 +11,9 @@
 # Scan directories (add specific ones here if needed)
 JFZ Photo Scans/
 
+# Environment
+.env
+
 # Python
 __pycache__/
 *.py[cod]

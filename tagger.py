@@ -3,6 +3,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import time
 
 
 def init_db(archive_root):
@@ -55,7 +56,7 @@ def hash_file(path):
 
 
 def _find_tiffs(dir_path):
-    """Return sorted list of absolute TIFF paths in dir_path."""
+    """Return sorted list of absolute TIFF/PNG paths in dir_path."""
     try:
         entries = os.listdir(dir_path)
     except FileNotFoundError:
@@ -63,7 +64,7 @@ def _find_tiffs(dir_path):
     return sorted(
         os.path.join(dir_path, e)
         for e in entries
-        if e.lower().endswith((".tif", ".tiff"))
+        if e.lower().endswith((".tif", ".tiff", ".png"))
     )
 
 
@@ -172,6 +173,32 @@ def get_envelope(conn, envelope_id):
     return conn.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,)).fetchone()
 
 
+def get_scans_unassigned(conn, pending_only=False):
+    """Return recto scans with no envelope assigned."""
+    if pending_only:
+        return conn.execute(
+            "SELECT * FROM scans WHERE envelope_id IS NULL AND is_verso=0 AND state='PENDING'"
+            " ORDER BY scan_dir, rowid"
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM scans WHERE envelope_id IS NULL AND is_verso=0 ORDER BY scan_dir, rowid"
+    ).fetchall()
+
+
+def get_scans_for_envelope(conn, envelope_id, pending_only=False):
+    """Return recto scan records for envelope_id, ordered by scan_dir then rowid."""
+    if pending_only:
+        return conn.execute(
+            "SELECT * FROM scans WHERE envelope_id=? AND is_verso=0 AND state='PENDING'"
+            " ORDER BY scan_dir, rowid",
+            (envelope_id,),
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM scans WHERE envelope_id=? AND is_verso=0 ORDER BY scan_dir, rowid",
+        (envelope_id,),
+    ).fetchall()
+
+
 def get_scans_for_dir(conn, scan_dir, pending_only=False):
     """Return recto scan records for scan_dir, ordered by rowid."""
     if pending_only:
@@ -237,6 +264,21 @@ def list_envelopes(conn):
     """).fetchall()
 
 
+def get_envelopes_with_thumbnails(conn):
+    """Return list of (id, description, scan_count, pending_count, sample_hash)."""
+    rows = conn.execute("""
+        SELECT e.id, e.description,
+               COUNT(s.hash) AS scan_count,
+               SUM(CASE WHEN s.state='PENDING' AND s.is_verso=0 THEN 1 ELSE 0 END) AS pending_count,
+               MIN(CASE WHEN s.is_verso=0 THEN s.hash END) AS sample_hash
+        FROM envelopes e
+        LEFT JOIN scans s ON s.envelope_id = e.id
+        GROUP BY e.id
+        ORDER BY e.id
+    """).fetchall()
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Verso pairing
 # ---------------------------------------------------------------------------
@@ -265,21 +307,220 @@ def set_verso_pair(conn, recto_hash, verso_hash):
     conn.commit()
 
 
+def swap_verso_pair(conn, recto_hash, verso_hash):
+    """Swap which image is the recto and which is the verso."""
+    conn.execute("UPDATE scans SET is_verso=0, verso_hash=? WHERE hash=?", (recto_hash, verso_hash))
+    conn.execute("UPDATE scans SET is_verso=1, verso_hash=NULL WHERE hash=?", (recto_hash,))
+    conn.commit()
+
+
+def delete_scan(conn, archive_root, hash_val):
+    """Delete a scan: removes the file, cached thumbnails, and DB record.
+    If the scan has a paired verso, that verso is unlinked back to a regular pending scan."""
+    scan = get_scan(conn, hash_val)
+    if not scan:
+        return
+    if scan["verso_hash"]:
+        conn.execute("UPDATE scans SET is_verso=0, verso_hash=NULL WHERE hash=?", (scan["verso_hash"],))
+    for suffix in ("_thumb.jpg", "_preview.jpg"):
+        cache = os.path.join(_thumbs_dir(archive_root), f"{hash_val}{suffix}")
+        if os.path.exists(cache):
+            os.remove(cache)
+    file_path = os.path.join(archive_root, scan["scan_dir"], scan["filename"])
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    conn.execute("DELETE FROM scans WHERE hash=?", (hash_val,))
+
+
+# ---------------------------------------------------------------------------
+# Rotation
+# ---------------------------------------------------------------------------
+
+def rotate_scan_file(conn, archive_root, hash_val, degrees):
+    """Rotate a scan image by degrees (positive=CCW, negative=CW).
+    Updates the DB hash, clears cache. Returns the new hash.
+    """
+    from PIL import Image
+    scan = get_scan(conn, hash_val)
+    file_path = os.path.join(archive_root, scan["scan_dir"], scan["filename"])
+
+    img = Image.open(file_path)
+    img.rotate(degrees, expand=True).save(file_path)
+
+    new_hash = hash_file(file_path)
+
+    for suffix in ("_thumb.jpg", "_preview.jpg"):
+        cache = os.path.join(_thumbs_dir(archive_root), f"{hash_val}{suffix}")
+        if os.path.exists(cache):
+            os.remove(cache)
+
+    conn.execute("UPDATE scans SET verso_hash=? WHERE verso_hash=?", (new_hash, hash_val))
+    conn.execute("UPDATE scans SET hash=? WHERE hash=?", (new_hash, hash_val))
+    conn.commit()
+    return new_hash
+
+
+# ---------------------------------------------------------------------------
+# JPEG export
+# ---------------------------------------------------------------------------
+
+def export_scan(archive_root, scan):
+    """Generate a full-resolution JPEG for one REVIEWED scan, copying EXIF from the TIFF.
+
+    Returns the jpeg_path relative to archive_root.
+    """
+    from PIL import Image
+    scan_dir = scan["scan_dir"]
+    tiff_path = os.path.join(archive_root, scan_dir, scan["filename"])
+    export_dir = os.path.join(archive_root, scan_dir, "export")
+    os.makedirs(export_dir, exist_ok=True)
+
+    base = os.path.splitext(scan["filename"])[0]
+    jpeg_name = base + ".jpg"
+    jpeg_path = os.path.join(export_dir, jpeg_name)
+
+    if os.path.exists(jpeg_path) and os.path.getmtime(jpeg_path) >= os.path.getmtime(tiff_path):
+        return os.path.join(scan_dir, "export", jpeg_name)
+
+    img = Image.open(tiff_path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.save(jpeg_path, "JPEG", quality=90)
+
+    result = subprocess.run(
+        ["exiftool", "-TagsFromFile", tiff_path, "-all:all",
+         "-overwrite_original", jpeg_path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"exiftool EXIF copy failed: {result.stderr.strip()}")
+
+    return os.path.join(scan_dir, "export", jpeg_name)
+
+
+def export_directory(conn, archive_root, scan_dir):
+    """Export all REVIEWED rectos in scan_dir to JPEG. Returns count exported."""
+    scans = conn.execute(
+        "SELECT * FROM scans WHERE scan_dir=? AND is_verso=0 AND state='REVIEWED'",
+        (scan_dir,),
+    ).fetchall()
+    exported = 0
+    for scan in scans:
+        jpeg_rel_path = export_scan(archive_root, scan)
+        conn.execute(
+            "UPDATE scans SET state='EXPORTED', jpeg_path=? WHERE hash=?",
+            (jpeg_rel_path, scan["hash"]),
+        )
+        exported += 1
+    conn.commit()
+    return exported
+
+
+def mark_uploaded(conn, scan_dir):
+    """Mark all EXPORTED scans in scan_dir as UPLOADED with current timestamp."""
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    result = conn.execute(
+        "UPDATE scans SET state='UPLOADED', uploaded_at=? WHERE scan_dir=? AND state='EXPORTED'",
+        (now, scan_dir),
+    )
+    conn.commit()
+    return result.rowcount
+
+
+# ---------------------------------------------------------------------------
+# Migration from old tag_photo.py workflow
+# ---------------------------------------------------------------------------
+
+def _exif_ts_to_date(ts):
+    """Convert EXIF timestamp '1989:08:19 12:00:00' to compressed date string.
+    day==01, month==01 → YYYY; day==01 → YYYY-MM; otherwise → YYYY-MM-DD."""
+    if not ts:
+        return None
+    date_part = ts.split(' ')[0]
+    parts = date_part.split(':')
+    if len(parts) < 2:
+        return parts[0]
+    year, month = parts[0], parts[1]
+    day = parts[2] if len(parts) > 2 else '01'
+    if day == '01' and month == '01':
+        return year
+    if day == '01':
+        return f"{year}-{month}"
+    return f"{year}-{month}-{day}"
+
+
+def migrate_directory(conn, archive_root, scan_dir):
+    """Import TIFFs from scan_dir into the new DB, reading metadata from the old .scans.db.
+
+    Returns (added, skipped) counts.
+    State mapping: PROCESSED → REVIEWED, SKIPPED → SKIPPED, anything else → PENDING.
+    applied_description → verso_text, applied_timestamp → date_inferred (date_source=manual).
+    """
+    dir_path = os.path.join(archive_root, scan_dir)
+    old_db_path = os.path.join(dir_path, '.scans.db')
+
+    old_records = {}
+    if os.path.exists(old_db_path):
+        import sqlite3 as _sqlite3
+        old_conn = _sqlite3.connect(old_db_path)
+        old_conn.row_factory = _sqlite3.Row
+        for row in old_conn.execute("SELECT filename, state, applied_timestamp, applied_description FROM scans"):
+            old_records[row['filename']] = row
+        old_conn.close()
+
+    STATE_MAP = {'PROCESSED': 'REVIEWED', 'SKIPPED': 'SKIPPED'}
+    added = skipped = 0
+
+    for path in _find_tiffs(dir_path):
+        filename = os.path.basename(path)
+        file_hash = hash_file(path)
+
+        existing = conn.execute("SELECT hash FROM scans WHERE hash=?", (file_hash,)).fetchone()
+        if existing:
+            skipped += 1
+            continue
+
+        old = old_records.get(filename)
+        state = STATE_MAP.get(old['state'] if old else None, 'PENDING')
+        verso_text = (old['applied_description'] or None) if old else None
+        date_inferred = _exif_ts_to_date(old['applied_timestamp'] if old else None)
+        date_source = 'manual' if date_inferred else None
+
+        conn.execute(
+            "INSERT INTO scans (hash, filename, scan_dir, verso_text, date_inferred, date_source, state)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (file_hash, filename, scan_dir, verso_text, date_inferred, date_source, state),
+        )
+        added += 1
+
+    conn.commit()
+    return added, skipped
+
+
 # ---------------------------------------------------------------------------
 # Scan directory registration
 # ---------------------------------------------------------------------------
 
 def scan_directory(conn, archive_root, scan_dir, envelope_id=None):
-    """Hash all TIFFs in scan_dir and register new ones as PENDING.
+    """Hash all TIFFs/PNGs in scan_dir and register new ones as PENDING.
 
-    If envelope_id is given it is set on newly inserted records only.
+    Skips files whose filename is already registered in this scan_dir (prevents
+    duplicates when a file is edited and re-hashed).
     Returns the number of newly added records.
     """
     dir_path = os.path.join(archive_root, scan_dir)
+    existing_filenames = {
+        row[0] for row in conn.execute(
+            "SELECT filename FROM scans WHERE scan_dir=?", (scan_dir,)
+        )
+    }
     added = 0
     for path in _find_tiffs(dir_path):
-        file_hash = hash_file(path)
         filename = os.path.basename(path)
+        if filename in existing_filenames:
+            continue
+        file_hash = hash_file(path)
         cursor = conn.execute(
             "INSERT OR IGNORE INTO scans (hash, filename, scan_dir, envelope_id, state)"
             " VALUES (?, ?, ?, ?, 'PENDING')",
@@ -342,3 +583,87 @@ def reopen_photo(conn, hash_val):
             (hash_val,),
         )
         conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# LLM inference
+# ---------------------------------------------------------------------------
+
+def make_anthropic_llm_fn(model="claude-sonnet-4-6"):
+    import anthropic
+    import base64
+    client = anthropic.Anthropic()
+
+    def llm_fn(prompt, image_path=None):
+        content = []
+        if image_path:
+            with open(image_path, "rb") as f:
+                data = base64.standard_b64encode(f.read()).decode("utf-8")
+            ext = os.path.splitext(image_path)[1].lower().lstrip(".")
+            media_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                          "png": "image/png", "gif": "image/gif",
+                          "webp": "image/webp"}.get(ext, "image/jpeg")
+            content.append({"type": "image",
+                             "source": {"type": "base64", "media_type": media_type, "data": data}})
+        content.append({"type": "text", "text": prompt})
+        msg = client.messages.create(
+            model=model, max_tokens=1024,
+            messages=[{"role": "user", "content": content}]
+        )
+        return msg.content[0].text
+
+    return llm_fn
+
+
+def parse_with_llm(llm_fn, prompt, image_path=None, max_retries=3):
+    """Call llm_fn and return validated JSON text, retrying on rate limits or bad JSON."""
+    for attempt in range(max_retries):
+        try:
+            raw = llm_fn(prompt, image_path)
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            json.loads(text)
+            return text
+        except json.JSONDecodeError:
+            if attempt == max_retries - 1:
+                raise ValueError(f"LLM returned non-JSON after {max_retries} attempts: {raw[:300]}")
+        except Exception as e:
+            msg = str(e).lower()
+            if ("rate" in msg or "overload" in msg) and attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            raise
+    raise RuntimeError("parse_with_llm: exhausted retries")
+
+
+def extract_verso_text(llm_fn, image_path):
+    """Return transcribed text from a verso scan image, or None if no text found."""
+    prompt = (
+        "This is a scan of the back of a physical photograph. "
+        "Transcribe all text you can see, exactly as written — handwriting, printed dates, "
+        "photo lab stamps, captions, and any other markings. "
+        'Return JSON with a single key "verso_text" whose value is the transcribed text '
+        "(preserve line breaks with \\n), or null if there is no text."
+    )
+    raw = parse_with_llm(llm_fn, prompt, image_path)
+    return json.loads(raw).get("verso_text")
+
+
+def infer_date(llm_fn, verso_text=None, recto_stamp_text=None):
+    """Return {date, date_source, reasoning} inferred from available text clues."""
+    parts = []
+    if verso_text:
+        parts.append(f"Text written/printed on back of photo:\n{verso_text}")
+    if recto_stamp_text:
+        parts.append(f"Text printed on front border by photo lab:\n{recto_stamp_text}")
+    prompt = (
+        "Based on the following clues from a physical photograph, estimate when it was taken.\n\n"
+        + "\n\n".join(parts)
+        + "\n\nReturn JSON with:\n"
+        '- "date": best estimate as YYYY, YYYY-MM, or YYYY-MM-DD (null if truly unknown)\n'
+        '- "date_source": one of "verso_text", "recto_stamp", "llm_guess"\n'
+        '- "reasoning": one short sentence explaining the estimate'
+    )
+    raw = parse_with_llm(llm_fn, prompt)
+    return json.loads(raw)

@@ -1,14 +1,37 @@
 {% extends "base.html" %}
-{% block title %}JFZ Tagger{% endblock %}
-{% block nav %}<span style="color:#666">Select a scan directory</span>{% endblock %}
+{% block nav %}<span style="color:#666">{{ archive_name }}</span>{% endblock %}
 {% block content %}
-<h2 style="margin-bottom:16px; font-size:16px;">Scan directories</h2>
-<ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
-  {% for sd in scan_dirs %}
-  <li>
-    <a href="{{ url_for('tag_grid', scan_dir=sd) }}" class="btn">{{ sd }}</a>
-    <a href="{{ url_for('browse_grid', scan_dir=sd) }}" class="btn btn-sm" style="margin-left:6px;">Browse</a>
-  </li>
-  {% endfor %}
-</ul>
+<div style="display:flex; gap:40px; flex-wrap:wrap; align-items:flex-start;">
+
+  <div>
+    <h2 style="margin-bottom:12px; font-size:15px; font-weight:600;">Scan directories</h2>
+    <ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
+      {% for sd in scan_dirs %}
+      <li>
+        <a href="{{ url_for('tag_grid', scan_dir=sd) }}" class="btn">{{ sd }}</a>
+        <a href="{{ url_for('browse_grid', scan_dir=sd) }}" class="btn btn-sm"
+           style="margin-left:6px;">Browse</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  {% if envelopes %}
+  <div>
+    <h2 style="margin-bottom:12px; font-size:15px; font-weight:600;">Envelopes</h2>
+    <ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
+      {% for env_id, env_desc, scan_count in envelopes %}
+      <li style="display:flex; align-items:center; gap:8px;">
+        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
+          {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
+          <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
+        </a>
+        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}" class="btn btn-sm">Browse</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+</div>
 {% endblock %}

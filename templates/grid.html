@@ -1,33 +1,118 @@
 {% extends "base.html" %}
-{% block title %}{{ scan_dir }}{% endblock %}
+{% block title %}{{ scope.label }}{% endblock %}
 {% block head %}
 <style>
   .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
   .toolbar h2 { font-size:15px; font-weight:600; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px; }
-  .card { background:#fff; border:1px solid #ddd; border-radius:6px; overflow:hidden;
+
+  /* Card */
+  .card { position:relative; background:#fff; border:1px solid #ddd; border-radius:6px; overflow:hidden;
           transition:box-shadow .15s; }
   .card:hover { box-shadow:0 2px 8px rgba(0,0,0,.15); }
+  .card.selected { outline:3px solid #2563eb; outline-offset:-2px; }
   .card a { display:block; text-decoration:none; color:inherit; }
   .card img { width:100%; display:block; aspect-ratio:3/4; object-fit:cover; background:#e8e8e8; }
   .card-info { padding:6px 8px; font-size:12px; }
   .card-env { font-weight:600; color:#222; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .card-file { color:#888; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:1px; }
   .card-meta { margin-top:3px; display:flex; align-items:center; gap:4px; }
+
+  /* Checkbox */
+  .card-check {
+    position:absolute; top:6px; left:6px; z-index:2;
+    width:22px; height:22px; border-radius:50%;
+    background:rgba(0,0,0,.35); border:2px solid rgba(255,255,255,.75);
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; opacity:0; transition:opacity .12s;
+    flex-shrink:0;
+  }
+  .card:hover .card-check,
+  .card.selected .card-check,
+  .any-selected .card-check { opacity:1; }
+  .card.selected .card-check { background:#2563eb; border-color:#2563eb; }
+  .card-check svg { display:none; }
+  .card.selected .card-check svg { display:block; }
+
+  /* Selection bar */
+  .sel-bar {
+    position:fixed; bottom:0; left:0; right:0;
+    background:#1e293b; color:#fff;
+    padding:12px 20px; display:flex; align-items:center; gap:10px;
+    transform:translateY(100%); transition:transform .18s;
+    z-index:50; font-size:14px;
+  }
+  .sel-bar.visible { transform:translateY(0); }
+  .sel-bar button { padding:6px 14px; border-radius:5px; border:none; cursor:pointer; font-size:13px; }
+  #btn-pair { background:#2563eb; color:#fff; }
+  #btn-pair:disabled { background:#475569; color:#94a3b8; cursor:default; }
+  #btn-delete { background:#dc2626; color:#fff; }
+  #btn-delete:disabled { background:#475569; color:#94a3b8; cursor:default; }
+  #btn-cancel-sel { background:transparent; color:#94a3b8; border:1px solid #475569 !important; }
+  #envelope-assign-select { background:#2a2a2a; color:#ccc; border:1px solid #444;
+                             border-radius:3px; padding:3px 6px; font-size:12px; cursor:pointer; }
+  #btn-assign { background:#7c3aed; color:#fff; }
+  #btn-assign:disabled { background:#475569; color:#94a3b8; cursor:default; }
+
+  /* Pair modal */
+  .modal-backdrop {
+    position:fixed; inset:0; background:rgba(0,0,0,.55);
+    display:none; align-items:center; justify-content:center; z-index:100;
+  }
+  .modal-backdrop.visible { display:flex; }
+  .modal-box {
+    background:#fff; border-radius:10px; padding:24px;
+    max-width:520px; width:94%; box-shadow:0 8px 30px rgba(0,0,0,.25);
+  }
+  .modal-choices { display:flex; gap:14px; }
+  .modal-choice { flex:1; text-align:center; }
+  .modal-side-label { font-size:11px; font-weight:600; text-transform:uppercase;
+                       letter-spacing:.5px; color:#777; margin-bottom:6px; }
+  .modal-choice img { width:100%; border-radius:5px; aspect-ratio:3/4; object-fit:cover;
+                       background:#e8e8e8; display:block; }
+  .modal-footer { margin-top:14px; display:flex; justify-content:flex-end; gap:8px; }
+
   .empty { margin-top:60px; text-align:center; color:#888; }
   .empty a { color:#2563eb; }
 </style>
 {% endblock %}
 {% block nav %}
   <span class="sep">|</span>
-  <a href="{{ url_for('tag_grid', scan_dir=scan_dir) }}"
+  {% if scope.type == 'scan_dir' %}
+  <a href="{{ url_for('tag_grid', scan_dir=scope.scan_dir) }}"
      {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
     Tag{% if pending_count %} ({{ pending_count }}){% endif %}
   </a>
-  <a href="{{ url_for('browse_grid', scan_dir=scan_dir) }}"
+  <a href="{{ url_for('browse_grid', scan_dir=scope.scan_dir) }}"
      {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
   <span class="sep">|</span>
-  <span style="color:#666; font-size:12px;">{{ scan_dir }}</span>
+  <select onchange="window.location=this.value"
+          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
+                 padding:2px 6px;font-size:12px;cursor:pointer;">
+    {% for dir in scan_dirs %}
+    <option value="{{ url_for('tag_grid' if mode=='tag' else 'browse_grid', scan_dir=dir) }}"
+            {% if dir == scope.scan_dir %}selected{% endif %}>{{ dir }}</option>
+    {% endfor %}
+  </select>
+  {% elif scope.type == 'envelope' %}
+  <a href="{{ url_for('envelope_tag_grid', envelope_id=scope.envelope_id) }}"
+     {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
+    Tag{% if pending_count %} ({{ pending_count }}){% endif %}
+  </a>
+  <a href="{{ url_for('envelope_browse_grid', envelope_id=scope.envelope_id) }}"
+     {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
+  <span class="sep">|</span>
+  <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
+  {% else %}
+  <a href="{{ url_for('unassigned_tag_grid') }}"
+     {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
+    Tag{% if pending_count %} ({{ pending_count }}){% endif %}
+  </a>
+  <a href="{{ url_for('unassigned_browse_grid') }}"
+     {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
+  <span class="sep">|</span>
+  <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
+  {% endif %}
 {% endblock %}
 {% block content %}
 <div class="toolbar">
@@ -38,14 +123,53 @@
       {{ scans|length }} photo{{ 's' if scans|length != 1 else '' }}
     {% endif %}
   </h2>
+  {% if scope.type == 'scan_dir' %}
+  <form method="POST" action="{{ url_for('scan_for_new', scan_dir=scope.scan_dir) }}">
+    <button class="btn btn-sm">Scan for new photos</button>
+  </form>
+  {% endif %}
+  {% if mode == 'browse' and scope.type == 'scan_dir' and reviewed_count %}
+  <form method="POST" action="{{ url_for('export_dir', scan_dir=scope.scan_dir) }}"
+        onsubmit="this.querySelector('button').textContent='Exporting…'; this.querySelector('button').disabled=true;">
+    <button class="btn btn-sm btn-primary">
+      Export {{ reviewed_count }} reviewed photo{{ 's' if reviewed_count != 1 else '' }}
+    </button>
+  </form>
+  {% endif %}
+  {% if request.args.get('exported') %}
+  <span style="font-size:13px; color:#065f46;">
+    ✓ {{ request.args.get('exported') }} JPEG{{ 's' if request.args.get('exported') != '1' else '' }} exported
+  </span>
+  {% endif %}
+  {% if request.args.get('added') %}
+  <span style="font-size:13px; color:#1e40af;">
+    {{ '✓ ' + request.args.get('added') + ' new photo' + ('s' if request.args.get('added') != '0' else '') + ' found'
+       if request.args.get('added') != '0'
+       else 'No new photos found' }}
+  </span>
+  {% endif %}
 </div>
 
 {% if scans %}
-<div class="grid">
+<div class="grid" id="grid">
   {% for scan in scans %}
-  {% set detail_url = url_for('tag_detail' if mode=='tag' else 'browse_detail',
-                               scan_dir=scan_dir, hash_val=scan['hash']) %}
-  <div class="card">
+  {% if scope.type == 'scan_dir' %}
+    {% set detail_url = url_for('tag_detail' if mode=='tag' else 'browse_detail',
+                                 scan_dir=scope.scan_dir, hash_val=scan['hash']) %}
+  {% elif scope.type == 'envelope' %}
+    {% set detail_url = url_for('envelope_tag_detail' if mode=='tag' else 'envelope_browse_detail',
+                                 envelope_id=scope.envelope_id, hash_val=scan['hash']) %}
+  {% else %}
+    {% set detail_url = url_for('tag_detail' if mode=='tag' else 'browse_detail',
+                                 scan_dir=scan['scan_dir'], hash_val=scan['hash']) %}
+  {% endif %}
+  <div class="card" data-hash="{{ scan['hash'] }}">
+    <div class="card-check" onclick="toggleSelect(event, '{{ scan['hash'] }}')">
+      <svg width="12" height="10" viewBox="0 0 12 10" fill="none">
+        <path d="M1 5l3.5 3.5L11 1" stroke="white" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
     <a href="{{ detail_url }}">
       <img src="{{ url_for('thumbnail', hash_val=scan['hash']) }}" loading="lazy"
            alt="{{ scan['filename'] }}">
@@ -74,4 +198,186 @@
   {% endif %}
 </div>
 {% endif %}
+
+<!-- Selection bar -->
+<div class="sel-bar" id="sel-bar">
+  <span id="sel-count">0 selected</span>
+  {% if grid_pair_url %}<button id="btn-pair" disabled onclick="openPairModal()">Pair as recto/verso</button>{% endif %}
+  {% if grid_delete_url %}<button id="btn-delete" disabled onclick="openDeleteModal()">Delete</button>{% endif %}
+  <select id="envelope-assign-select" onchange="updateAssignBtn()">
+    <option value="">— assign envelope —</option>
+    {% for env_id, env_desc, _ in all_envelopes %}
+    <option value="{{ env_id }}">{{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}</option>
+    {% endfor %}
+  </select>
+  <button id="btn-assign" disabled onclick="submitAssign()">Assign</button>
+  <button id="btn-cancel-sel" onclick="clearSelection()">Cancel</button>
+</div>
+
+<!-- Pair modal -->
+<div class="modal-backdrop" id="pair-modal">
+  <div class="modal-box">
+    <div class="modal-choices">
+      <div class="modal-choice">
+        <div class="modal-side-label">Front</div>
+        <img id="modal-img-0" alt="">
+      </div>
+      <div class="modal-choice">
+        <div class="modal-side-label">Back</div>
+        <img id="modal-img-1" alt="">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-sm" onclick="swapPairModal()">⇄ Swap</button>
+      <button class="btn btn-primary btn-sm" onclick="submitPair()">Confirm</button>
+      <button class="btn btn-sm" onclick="closePairModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<form id="pair-form" method="POST" action="{{ grid_pair_url }}" style="display:none">
+  <input type="hidden" name="recto_hash" id="form-recto">
+  <input type="hidden" name="verso_hash" id="form-verso">
+</form>
+
+<!-- Delete modal -->
+<div class="modal-backdrop" id="delete-modal">
+  <div class="modal-box">
+    <h3>Delete <span id="del-count"></span>?</h3>
+    <div id="del-thumbs" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:14px;"></div>
+    <div class="modal-footer">
+      <button class="btn btn-sm" style="background:#dc2626;color:#fff;border-color:#dc2626"
+              onclick="submitDelete()">Delete</button>
+      <button class="btn btn-sm" onclick="closeDeleteModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<form id="delete-form" method="POST" action="{{ grid_delete_url }}" style="display:none">
+</form>
+
+<form id="assign-form" method="POST" action="{{ url_for('assign_envelope') }}" style="display:none">
+</form>
+
+<script>
+const selected = new Set();
+let pairHashes = [];
+
+function toggleSelect(e, hash) {
+  e.preventDefault();
+  e.stopPropagation();
+  const card = document.querySelector(`.card[data-hash="${hash}"]`);
+  if (selected.has(hash)) {
+    selected.delete(hash);
+    card.classList.remove('selected');
+  } else {
+    selected.add(hash);
+    card.classList.add('selected');
+  }
+  document.getElementById('grid').classList.toggle('any-selected', selected.size > 0);
+  updateBar();
+}
+
+function updateBar() {
+  const n = selected.size;
+  document.getElementById('sel-bar').classList.toggle('visible', n > 0);
+  document.getElementById('sel-count').textContent = n + ' selected';
+  const btnPair = document.getElementById('btn-pair');
+  const btnDelete = document.getElementById('btn-delete');
+  if (btnPair) btnPair.disabled = n !== 2;
+  if (btnDelete) btnDelete.disabled = n < 1;
+  updateAssignBtn();
+}
+
+function updateAssignBtn() {
+  const hasEnv = document.getElementById('envelope-assign-select').value !== '';
+  document.getElementById('btn-assign').disabled = selected.size < 1 || !hasEnv;
+}
+
+function submitAssign() {
+  const sel = document.getElementById('envelope-assign-select');
+  const envId = sel.value;
+  const envLabel = sel.options[sel.selectedIndex].text;
+  const n = selected.size;
+  if (!confirm(`Assign ${n} photo${n===1?'':'s'} to ${envLabel}?`)) return;
+  const form = document.getElementById('assign-form');
+  form.innerHTML = '';
+  selected.forEach(h => {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'hash'; inp.value = h;
+    form.appendChild(inp);
+  });
+  [['envelope_id', envId], ['next', window.location.href]].forEach(([name, val]) => {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = name; inp.value = val;
+    form.appendChild(inp);
+  });
+  form.submit();
+}
+
+function clearSelection() {
+  selected.forEach(h => {
+    document.querySelector(`.card[data-hash="${h}"]`).classList.remove('selected');
+  });
+  selected.clear();
+  document.getElementById('grid').classList.remove('any-selected');
+  updateBar();
+}
+
+function openPairModal() {
+  pairHashes = [...selected];
+  document.getElementById('modal-img-0').src = `/thumb/${pairHashes[0]}`;
+  document.getElementById('modal-img-1').src = `/thumb/${pairHashes[1]}`;
+  document.getElementById('pair-modal').classList.add('visible');
+}
+
+function closePairModal() {
+  document.getElementById('pair-modal').classList.remove('visible');
+}
+
+function swapPairModal() {
+  pairHashes.reverse();
+  document.getElementById('modal-img-0').src = `/thumb/${pairHashes[0]}`;
+  document.getElementById('modal-img-1').src = `/thumb/${pairHashes[1]}`;
+}
+
+function submitPair() {
+  document.getElementById('form-recto').value = pairHashes[0];
+  document.getElementById('form-verso').value = pairHashes[1];
+  document.getElementById('pair-form').submit();
+}
+
+function openDeleteModal() {
+  const n = selected.size;
+  document.getElementById('del-count').textContent = n + ' photo' + (n === 1 ? '' : 's');
+  const container = document.getElementById('del-thumbs');
+  container.innerHTML = '';
+  selected.forEach(h => {
+    const filename = document.querySelector(`.card[data-hash="${h}"] .card-file`).textContent.trim();
+    const div = document.createElement('div');
+    div.style.cssText = 'text-align:center; width:100px;';
+    div.innerHTML = `<img src="/thumb/${h}" style="width:100px; height:133px; object-fit:cover; border-radius:4px; border:1px solid #ddd; display:block;">
+                     <div style="font-size:11px; color:#777; margin-top:4px; word-break:break-all;">${filename}</div>`;
+    container.appendChild(div);
+  });
+  document.getElementById('delete-modal').classList.add('visible');
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.remove('visible');
+}
+
+function submitDelete() {
+  const form = document.getElementById('delete-form');
+  form.innerHTML = '';
+  selected.forEach(h => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'hash';
+    input.value = h;
+    form.appendChild(input);
+  });
+  form.submit();
+}
+</script>
 {% endblock %}

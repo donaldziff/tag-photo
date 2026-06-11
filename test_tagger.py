@@ -237,7 +237,7 @@ def test_scan_directory_preserves_existing_state():
 def test_scan_directory_ignores_non_tiff():
     with tempfile.TemporaryDirectory() as d:
         conn, archive = open_archive(d, "scans-2024-01")
-        for name in ["photo.jpg", "photo.png", "notes.txt"]:
+        for name in ["photo.jpg", "notes.txt"]:
             open(os.path.join(d, "scans-2024-01", name), "w").close()
 
         added = tagger.scan_directory(conn, archive, "scans-2024-01")
@@ -261,6 +261,17 @@ def test_scan_directory_handles_tiff_extension():
     with tempfile.TemporaryDirectory() as d:
         conn, archive = open_archive(d, "scans-2024-01")
         make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tiff", b"img1")
+
+        added = tagger.scan_directory(conn, archive, "scans-2024-01")
+
+        assert added == 1
+        conn.close()
+
+
+def test_scan_directory_handles_png_extension():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.png", b"img1")
 
         added = tagger.scan_directory(conn, archive, "scans-2024-01")
 

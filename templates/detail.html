@@ -5,13 +5,22 @@
   .page { display:grid; grid-template-columns:1fr 340px; gap:20px; align-items:start; }
   @media (max-width:900px) { .page { grid-template-columns:1fr; } }
 
-  .images { display:flex; gap:12px; align-items:flex-start; }
+  .images { display:flex; gap:12px; align-items:flex-start;
+            position:sticky; top:20px; }
   .img-recto { flex:1; min-width:0; }
   .img-verso { flex:0 0 240px; }
   .img-recto img, .img-verso img { width:100%; border:1px solid #ccc; border-radius:4px;
                                     display:block; background:#e8e8e8; }
+  .img-recto img { max-height:calc(100vh - 70px); object-fit:contain; }
   .verso-label { font-size:11px; color:#888; text-transform:uppercase;
                  letter-spacing:.5px; margin-bottom:4px; }
+  .img-verso img { cursor:zoom-in; }
+
+  .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:200;
+              display:none; align-items:center; justify-content:center; cursor:zoom-out; }
+  .lightbox.visible { display:flex; }
+  .lightbox img { max-width:90vw; max-height:90vh; object-fit:contain;
+                  border-radius:4px; box-shadow:0 4px 40px rgba(0,0,0,.6); }
 
   .sidebar { background:#fff; border:1px solid #ddd; border-radius:6px; padding:16px; }
   .photo-header { margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid #eee; }
@@ -49,19 +58,28 @@
 {% endblock %}
 {% block nav %}
   <span class="sep" style="color:#444">|</span>
-  <a href="{{ url_for('tag_grid', scan_dir=scan_dir) }}"
+  <a href="{{ urls.tag_grid }}"
      {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
     Tag{% if pending_count %} ({{ pending_count }}){% endif %}
   </a>
-  <a href="{{ url_for('browse_grid', scan_dir=scan_dir) }}"
+  <a href="{{ urls.browse_grid }}"
      {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
   <span class="sep" style="color:#444">|</span>
-  <span style="color:#666; font-size:12px;">{{ scan_dir }}</span>
+  {% if scope.type == 'scan_dir' %}
+  <select onchange="window.location=this.value"
+          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
+                 padding:2px 6px;font-size:12px;cursor:pointer;">
+    {% for dir in scan_dirs %}
+    <option value="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail', scan_dir=dir, hash_val=scan['hash']) if dir == scope.scan_dir else url_for('tag_grid' if mode=='tag' else 'browse_grid', scan_dir=dir) }}"
+            {% if dir == scope.scan_dir %}selected{% endif %}>{{ dir }}</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
+  {% endif %}
 {% endblock %}
 
 {% set editable = mode == 'tag' or (mode == 'browse' and scan['state'] in ('PENDING','REVIEWED','NEEDS_PAIRING')) %}
-{% set accept_url = url_for('tag_accept' if mode=='tag' else 'browse_accept',
-                             scan_dir=scan_dir, hash_val=scan['hash']) %}
 
 {% block content %}
 <div class="nav-row">
@@ -70,13 +88,11 @@
     <span style="font-size:13px; color:#555; margin-left:8px;">{{ scan['filename'] }}</span>
   </div>
   <div class="nav-links">
-    {% if prev_hash %}
-    <a href="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail',
-                        scan_dir=scan_dir, hash_val=prev_hash) }}" class="btn btn-sm">← Prev</a>
+    {% if urls.prev %}
+    <a id="nav-prev" href="{{ urls.prev }}" class="btn btn-sm">← Prev</a>
     {% endif %}
-    {% if next_hash %}
-    <a href="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail',
-                        scan_dir=scan_dir, hash_val=next_hash) }}" class="btn btn-sm">Next →</a>
+    {% if urls.next %}
+    <a id="nav-next" href="{{ urls.next }}" class="btn btn-sm">Next →</a>
     {% endif %}
   </div>
 </div>
@@ -86,11 +102,38 @@
   <div class="images">
     <div class="img-recto">
       <img src="{{ url_for('image', hash_val=scan['hash']) }}" alt="recto">
+      {% if not safe_mode %}
+      <div style="display:flex; justify-content:center; gap:8px; margin-top:8px;">
+        <form method="POST" action="{{ urls.rotate }}">
+          <input type="hidden" name="direction" value="ccw">
+          <input type="hidden" name="next" value="{{ request.url }}">
+          <button class="btn btn-sm" title="Rotate left">↺</button>
+        </form>
+        <form method="POST" action="{{ urls.rotate }}">
+          <input type="hidden" name="direction" value="cw">
+          <input type="hidden" name="next" value="{{ request.url }}">
+          <button class="btn btn-sm" title="Rotate right">↻</button>
+        </form>
+        <form method="POST" action="{{ urls.regen_thumb }}">
+          <button class="btn btn-sm" title="Regenerate thumbnail">⟳</button>
+        </form>
+      </div>
+      {% endif %}
     </div>
     {% if verso %}
     <div class="img-verso">
-      <div class="verso-label">Verso</div>
-      <img src="{{ url_for('image', hash_val=verso['hash']) }}" alt="verso">
+      <div class="verso-label" style="display:flex; align-items:center; justify-content:space-between;">
+        <span>Verso</span>
+        {% if not safe_mode %}
+        <form method="POST" action="{{ urls.swap_verso }}" style="margin:0;">
+          <input type="hidden" name="next" value="{{ urls.swap_verso_next }}">
+          <button class="btn btn-sm" type="submit"
+                  onclick="return confirm('Swap recto and verso?')">⇄ Swap</button>
+        </form>
+        {% endif %}
+      </div>
+      <img src="{{ url_for('image', hash_val=verso['hash']) }}" alt="verso"
+           onclick="openLightbox(this.src)">
     </div>
     {% endif %}
   </div>
@@ -106,7 +149,7 @@
 
     {% if editable and not safe_mode %}
     <!-- Editable form -->
-    <form method="POST" action="{{ accept_url }}">
+    <form method="POST" action="{{ urls.accept }}">
       <div class="field">
         <label>Envelope</label>
         <select name="envelope_id">
@@ -150,11 +193,21 @@
     </form>
     {% if mode == 'tag' %}
     <div class="actions" style="margin-top:8px;">
-      <form method="POST" action="{{ url_for('tag_skip', scan_dir=scan_dir, hash_val=scan['hash']) }}">
-        <button class="btn">Skip</button>
-      </form>
-      <form method="POST" action="{{ url_for('tag_needs_pairing', scan_dir=scan_dir, hash_val=scan['hash']) }}">
+      <form method="POST" action="{{ urls.needs_pairing }}">
         <button class="btn btn-warning btn-sm">Needs Pairing</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if has_llm %}
+    <div class="actions" style="margin-top:8px;">
+      {% if verso %}
+      <form method="POST" action="{{ urls.extract_verso }}">
+        <button class="btn btn-sm">Extract verso text</button>
+      </form>
+      {% endif %}
+      <form method="POST" action="{{ urls.infer_date }}">
+        <button class="btn btn-sm">Infer date</button>
       </form>
     </div>
     {% endif %}
@@ -192,11 +245,22 @@
     </div>
     {% if not safe_mode %}
     <div class="actions">
-      <form method="POST" action="{{ url_for('browse_edit', scan_dir=scan_dir, hash_val=scan['hash']) }}">
+      <form method="POST" action="{{ urls.browse_edit }}">
         <button class="btn">Edit</button>
       </form>
     </div>
     {% endif %}
+    {% endif %}
+
+    {% if not safe_mode %}
+    <div style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
+      <form method="POST" action="{{ urls.delete }}"
+            onsubmit="return confirm('Delete {{ scan.filename }}? This cannot be undone.')">
+        <input type="hidden" name="hash" value="{{ scan['hash'] }}">
+        <input type="hidden" name="next" value="{{ urls.delete_next }}">
+        <button class="btn btn-sm" style="color:#dc2626; border-color:#dc2626;">Delete</button>
+      </form>
+    </div>
     {% endif %}
 
     <!-- EXIF readback -->
@@ -219,4 +283,25 @@
 
   </div><!-- sidebar -->
 </div><!-- page -->
+
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <img id="lightbox-img" src="" alt="">
+</div>
+
+<script>
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.add('visible');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('visible');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeLightbox(); return; }
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') { const a = document.getElementById('nav-prev'); if (a) a.click(); }
+  if (e.key === 'ArrowRight') { const a = document.getElementById('nav-next'); if (a) a.click(); }
+});
+</script>
 {% endblock %}
