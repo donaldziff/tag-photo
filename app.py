@@ -81,6 +81,36 @@ def _envelope_nav(db, envelope_id, hash_val, pending_only):
             hashes[idx + 1] if idx < len(hashes) - 1 else None)
 
 
+def _first_last_hash(scans):
+    if not scans:
+        return None, None
+    return scans[0]["hash"], scans[-1]["hash"]
+
+
+def _cross_dir_nav(db, scan_dirs, scan_dir, pending_only, want_next):
+    """Find the (scan_dir, hash) of the first/last matching photo in the next/prev scan dir."""
+    idx = scan_dirs.index(scan_dir)
+    candidates = scan_dirs[idx + 1:] if want_next else reversed(scan_dirs[:idx])
+    for d in candidates:
+        first, last = _first_last_hash(tagger.get_scans_for_dir(db, d, pending_only=pending_only))
+        target = first if want_next else last
+        if target:
+            return d, target
+    return None, None
+
+
+def _cross_envelope_nav(db, envelope_ids, envelope_id, pending_only, want_next):
+    """Find the (envelope_id, hash) of the first/last matching photo in the next/prev envelope."""
+    idx = envelope_ids.index(envelope_id)
+    candidates = envelope_ids[idx + 1:] if want_next else reversed(envelope_ids[:idx])
+    for e in candidates:
+        first, last = _first_last_hash(tagger.get_scans_for_envelope(db, e, pending_only=pending_only))
+        target = first if want_next else last
+        if target:
+            return e, target
+    return None, None
+
+
 def _detail_context(db, scan_dir, hash_val, mode):
     scan = tagger.get_scan(db, hash_val)
     envelope = tagger.get_envelope(db, scan["envelope_id"])
@@ -89,12 +119,21 @@ def _detail_context(db, scan_dir, hash_val, mode):
     file_path = os.path.join(app.config["ARCHIVE_ROOT"], scan["scan_dir"], scan["filename"])
     exif = tagger.read_exif(file_path)
     pending = _pending_count(db, scan_dir)
-    prev_hash, next_hash = _nav(db, scan_dir, hash_val, pending_only=(mode == "tag"))
+    pending_only = (mode == "tag")
+    prev_hash, next_hash = _nav(db, scan_dir, hash_val, pending_only=pending_only)
 
     scope = {"type": "scan_dir", "scan_dir": scan_dir, "label": scan_dir}
     det = "tag_detail" if mode == "tag" else "browse_detail"
-    prev_url = url_for(det, scan_dir=scan_dir, hash_val=prev_hash) if prev_hash else None
-    next_url = url_for(det, scan_dir=scan_dir, hash_val=next_hash) if next_hash else None
+    if prev_hash:
+        prev_url = url_for(det, scan_dir=scan_dir, hash_val=prev_hash)
+    else:
+        prev_dir, prev_cross = _cross_dir_nav(db, tagger.get_scan_dirs(db), scan_dir, pending_only, want_next=False)
+        prev_url = url_for(det, scan_dir=prev_dir, hash_val=prev_cross) if prev_dir else None
+    if next_hash:
+        next_url = url_for(det, scan_dir=scan_dir, hash_val=next_hash)
+    else:
+        next_dir, next_cross = _cross_dir_nav(db, tagger.get_scan_dirs(db), scan_dir, pending_only, want_next=True)
+        next_url = url_for(det, scan_dir=next_dir, hash_val=next_cross) if next_dir else None
     grid_url = url_for("tag_grid" if mode == "tag" else "browse_grid", scan_dir=scan_dir)
     urls = {
         "accept":         url_for("tag_accept" if mode == "tag" else "browse_accept", scan_dir=scan_dir, hash_val=hash_val),
@@ -129,12 +168,22 @@ def _envelope_detail_context(db, envelope_id, hash_val, mode):
     exif = tagger.read_exif(file_path)
     all_scans = tagger.get_scans_for_envelope(db, envelope_id)
     pending = sum(1 for s in all_scans if s["state"] == "PENDING")
-    prev_hash, next_hash = _envelope_nav(db, envelope_id, hash_val, pending_only=(mode == "tag"))
+    pending_only = (mode == "tag")
+    prev_hash, next_hash = _envelope_nav(db, envelope_id, hash_val, pending_only=pending_only)
 
     scope = {"type": "envelope", "envelope_id": envelope_id, "label": f"Envelope {envelope_id}"}
     det = "envelope_tag_detail" if mode == "tag" else "envelope_browse_detail"
-    prev_url = url_for(det, envelope_id=envelope_id, hash_val=prev_hash) if prev_hash else None
-    next_url = url_for(det, envelope_id=envelope_id, hash_val=next_hash) if next_hash else None
+    envelope_ids = [e["id"] for e in envelopes]
+    if prev_hash:
+        prev_url = url_for(det, envelope_id=envelope_id, hash_val=prev_hash)
+    else:
+        prev_env, prev_cross = _cross_envelope_nav(db, envelope_ids, envelope_id, pending_only, want_next=False)
+        prev_url = url_for(det, envelope_id=prev_env, hash_val=prev_cross) if prev_env else None
+    if next_hash:
+        next_url = url_for(det, envelope_id=envelope_id, hash_val=next_hash)
+    else:
+        next_env, next_cross = _cross_envelope_nav(db, envelope_ids, envelope_id, pending_only, want_next=True)
+        next_url = url_for(det, envelope_id=next_env, hash_val=next_cross) if next_env else None
     grid_url = url_for("envelope_tag_grid" if mode == "tag" else "envelope_browse_grid", envelope_id=envelope_id)
     urls = {
         "accept":         url_for("envelope_tag_accept" if mode == "tag" else "envelope_browse_accept", envelope_id=envelope_id, hash_val=hash_val),
@@ -276,6 +325,8 @@ def unassigned_browse_grid():
 @app.route("/<scan_dir>/")
 def tag_grid(scan_dir):
     db = get_db()
+    if scan_dir not in tagger.get_scan_dirs(db):
+        abort(404)
     scans = tagger.get_scans_for_dir(db, scan_dir, pending_only=True)
     scope = {"type": "scan_dir", "scan_dir": scan_dir, "label": scan_dir}
     return render_template("grid.html", scans=scans, scan_dir=scan_dir, scope=scope,
@@ -287,6 +338,8 @@ def tag_grid(scan_dir):
 @app.route("/<scan_dir>/browse")
 def browse_grid(scan_dir):
     db = get_db()
+    if scan_dir not in tagger.get_scan_dirs(db):
+        abort(404)
     scans = tagger.get_scans_for_dir(db, scan_dir)
     pending = sum(1 for s in scans if s["state"] == "PENDING")
     reviewed = sum(1 for s in scans if s["state"] == "REVIEWED")
