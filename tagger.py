@@ -47,6 +47,29 @@ def _ensure_schema(conn):
             input_tokens  INTEGER NOT NULL,
             output_tokens INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS persons (
+            name       TEXT PRIMARY KEY,
+            tag        TEXT UNIQUE,
+            birth_date TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS photo_persons (
+            hash        TEXT NOT NULL REFERENCES scans(hash),
+            person_name TEXT NOT NULL REFERENCES persons(name),
+            PRIMARY KEY (hash, person_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS date_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            hash            TEXT NOT NULL REFERENCES scans(hash),
+            date_value      TEXT,
+            date_source     TEXT,
+            date_confidence TEXT,
+            changed_at      TEXT NOT NULL,
+            note            TEXT,
+            person_name     TEXT REFERENCES persons(name)
+        );
     """)
     try:
         conn.execute("ALTER TABLE scans ADD COLUMN date_confidence TEXT")
@@ -64,6 +87,42 @@ def _ensure_schema(conn):
         conn.execute("ALTER TABLE scans ADD COLUMN store_type TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
+
+    # Migrate persons/photo_persons from the old id-keyed schema
+    # (persons.id PK, photo_persons.person_id) to the name-keyed schema
+    # (persons.name PK + UNIQUE tag, photo_persons.person_name).
+    person_cols = {row[1] for row in conn.execute("PRAGMA table_info(persons)")}
+    if "id" in person_cols:
+        conn.execute("ALTER TABLE persons RENAME TO persons_old")
+        conn.execute("ALTER TABLE photo_persons RENAME TO photo_persons_old")
+
+        conn.execute("""
+            CREATE TABLE persons (
+                name       TEXT PRIMARY KEY,
+                tag        TEXT UNIQUE,
+                birth_date TEXT
+            )
+        """)
+        conn.execute(
+            "INSERT OR IGNORE INTO persons (name, birth_date) SELECT name, birth_date FROM persons_old"
+        )
+
+        conn.execute("""
+            CREATE TABLE photo_persons (
+                hash        TEXT NOT NULL REFERENCES scans(hash),
+                person_name TEXT NOT NULL REFERENCES persons(name),
+                PRIMARY KEY (hash, person_name)
+            )
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO photo_persons (hash, person_name)
+            SELECT pp.hash, po.name
+            FROM photo_persons_old pp
+            JOIN persons_old po ON po.id = pp.person_id
+        """)
+
+        conn.execute("DROP TABLE persons_old")
+        conn.execute("DROP TABLE photo_persons_old")
 
     # EXPORTED/UPLOADED are no longer states; they're derived from jpeg_path/asset_id.
     conn.execute("UPDATE scans SET state='REVIEWED' WHERE state IN ('EXPORTED', 'UPLOADED')")
@@ -316,6 +375,137 @@ def get_envelopes_with_thumbnails(conn):
         ORDER BY e.id
     """).fetchall()
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Person tagging
+# ---------------------------------------------------------------------------
+
+def list_persons(conn):
+    """Return all persons (name, tag, birth_date), ordered by name."""
+    return conn.execute(
+        "SELECT name, tag, birth_date FROM persons ORDER BY name"
+    ).fetchall()
+
+
+def add_person(conn, name, tag=None, birth_date=None):
+    """Create a new person. No-op if a person with this name already exists."""
+    conn.execute(
+        "INSERT OR IGNORE INTO persons (name, tag, birth_date) VALUES (?, ?, ?)",
+        (name, tag, birth_date),
+    )
+    conn.commit()
+
+
+def update_person(conn, name, new_name, tag=None, birth_date=None):
+    """Update a person's name, tag, and birth_date (tag/birth_date may be None to clear).
+
+    name is the primary key, so renaming also updates any photo_persons references.
+    """
+    if new_name != name:
+        conn.execute(
+            "UPDATE photo_persons SET person_name = ? WHERE person_name = ?",
+            (new_name, name),
+        )
+    conn.execute(
+        "UPDATE persons SET name = ?, tag = ?, birth_date = ? WHERE name = ?",
+        (new_name, tag, birth_date, name),
+    )
+    conn.commit()
+
+
+def get_persons_for_photo(conn, hash_val):
+    """Return persons tagged in the given photo (name, tag, birth_date), ordered by name."""
+    return conn.execute("""
+        SELECT p.name, p.tag, p.birth_date
+        FROM persons p
+        JOIN photo_persons pp ON pp.person_name = p.name
+        WHERE pp.hash = ?
+        ORDER BY p.name
+    """, (hash_val,)).fetchall()
+
+
+def set_persons_for_photo(conn, hash_val, person_names):
+    """Replace the set of persons tagged in a photo with person_names."""
+    conn.execute("DELETE FROM photo_persons WHERE hash = ?", (hash_val,))
+    conn.executemany(
+        "INSERT INTO photo_persons (hash, person_name) VALUES (?, ?)",
+        [(hash_val, name) for name in person_names],
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Date history
+# ---------------------------------------------------------------------------
+
+DATE_CONFIDENCE_WEIGHTS = {"high": 3, "medium": 2, "low": 1}
+
+
+def add_date_history(conn, hash_val, date_value, date_source, date_confidence=None,
+                      note=None, person_name=None):
+    """Append a date estimate to date_history for hash_val."""
+    conn.execute("""
+        INSERT INTO date_history (hash, date_value, date_source, date_confidence, changed_at, note, person_name)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (hash_val, date_value, date_source, date_confidence,
+          datetime.now(timezone.utc).isoformat(), note, person_name))
+    conn.commit()
+
+
+def get_date_history(conn, hash_val):
+    """Return all date_history entries for hash_val, oldest first."""
+    return conn.execute("""
+        SELECT id, date_value, date_source, date_confidence, changed_at, note, person_name
+        FROM date_history WHERE hash = ? ORDER BY id
+    """, (hash_val,)).fetchall()
+
+
+def recalculate_date(conn, hash_val):
+    """Recompute scans.date_inferred and date_confidence from date_history.
+
+    Each date_history row with a non-empty date_value is a vote for that
+    value, weighted by DATE_CONFIDENCE_WEIGHTS[date_confidence] (default 1
+    for missing/unrecognized confidence). Votes are summed per distinct
+    date_value; the value with the highest total weight wins, ties broken
+    by the most recently added vote. The cached date_confidence is the
+    confidence of the strongest individual vote for the winning value.
+    """
+    rows = conn.execute("""
+        SELECT id, date_value, date_confidence FROM date_history
+        WHERE hash = ? AND date_value IS NOT NULL AND date_value != ''
+        ORDER BY id
+    """, (hash_val,)).fetchall()
+
+    if not rows:
+        conn.execute(
+            "UPDATE scans SET date_inferred=NULL, date_confidence=NULL WHERE hash=?",
+            (hash_val,),
+        )
+        conn.commit()
+        return
+
+    totals = {}       # date_value -> total weight
+    best_conf = {}    # date_value -> confidence of its strongest vote
+    best_weight = {}  # date_value -> that vote's weight
+    last_id = {}      # date_value -> id of its most recent vote
+
+    for row in rows:
+        weight = DATE_CONFIDENCE_WEIGHTS.get(row["date_confidence"], 1)
+        value = row["date_value"]
+        totals[value] = totals.get(value, 0) + weight
+        last_id[value] = row["id"]
+        if weight > best_weight.get(value, -1):
+            best_weight[value] = weight
+            best_conf[value] = row["date_confidence"]
+
+    winner = max(totals, key=lambda v: (totals[v], last_id[v]))
+
+    conn.execute(
+        "UPDATE scans SET date_inferred=?, date_confidence=? WHERE hash=?",
+        (winner, best_conf[winner], hash_val),
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -576,9 +766,11 @@ def scan_directory(conn, archive_root, scan_dir, envelope_id=None):
 # ---------------------------------------------------------------------------
 
 def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None,
-                 recto_stamp_text=None, date_inferred=None, date_source=None,
-                 date_confidence=None, envelope_id=None, subjects=None):
+                 recto_stamp_text=None, envelope_id=None, subjects=None):
     """Save metadata, write EXIF to the TIFF, and mark the photo REVIEWED.
+
+    date_inferred/date_source/date_confidence are not touched here — they
+    are cached values derived from date_history via recalculate_date.
 
     If the photo had been exported, clears jpeg_path and uploaded_at.
     """
@@ -587,13 +779,11 @@ def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None
 
     conn.execute("""
         UPDATE scans SET
-            description=?, verso_text=?, recto_stamp_text=?,
-            date_inferred=?, date_source=?, date_confidence=?, envelope_id=?,
+            description=?, verso_text=?, recto_stamp_text=?, envelope_id=?,
             subjects=?,
             state='REVIEWED', uploaded_at=NULL
         WHERE hash=?
-    """, (description, verso_text, recto_stamp_text,
-          date_inferred, date_source, date_confidence, envelope_id, subjects, hash_val))
+    """, (description, verso_text, recto_stamp_text, envelope_id, subjects, hash_val))
     if was_exported:
         conn.execute("UPDATE scans SET jpeg_path=NULL WHERE hash=?", (hash_val,))
     conn.commit()
@@ -604,7 +794,7 @@ def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None
         env = get_envelope(conn, envelope_id)
         if env:
             envelope_desc = env["description"]
-    write_exif(file_path, date_inferred=date_inferred, description=description,
+    write_exif(file_path, date_inferred=scan["date_inferred"], description=description,
                envelope_description=envelope_desc)
 
 

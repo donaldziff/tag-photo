@@ -39,6 +39,14 @@
                   min-height:20px; white-space:pre-wrap; word-break:break-word; }
   .readonly-val.empty { color:#bbb; font-style:italic; }
 
+  .persons-chips { display:flex; flex-wrap:wrap; gap:6px; min-height:22px; }
+  .person-chip { display:inline-flex; align-items:center; gap:4px;
+                 background:#eef2ff; border:1px solid #c7d2fe; border-radius:999px;
+                 padding:3px 6px 3px 10px; font-size:12px; color:#3730a3; }
+  .chip-remove { border:none; background:none; cursor:pointer; color:#6366f1;
+                 font-size:15px; line-height:1; padding:0 2px; }
+  .chip-remove:hover { color:#dc2626; }
+
   .actions { display:flex; gap:8px; flex-wrap:wrap; padding-top:12px;
              border-top:1px solid #eee; margin-top:4px; }
 
@@ -191,6 +199,34 @@
         <textarea name="description">{{ scan['description'] or '' }}</textarea>
       </div>
       <div class="field">
+        <label>Persons</label>
+        {% set tagged_names = persons_for_photo|map(attribute='name')|list %}
+        <div id="persons-chips" class="persons-chips">
+          {% for p in persons_for_photo %}
+          <span class="person-chip" data-name="{{ p.name }}">
+            <span class="chip-label">{{ p.tag or p.name }}</span>
+            <button type="button" class="chip-remove" onclick="removePerson(this)" aria-label="Remove">&times;</button>
+            <input type="hidden" name="persons" value="{{ p.name }}">
+          </span>
+          {% endfor %}
+        </div>
+        <div style="margin-top:6px;">
+          <select id="persons-add-select">
+            <option value="">Add person…</option>
+            {% for person in all_persons %}
+            <option value="{{ person.name }}" data-label="{{ person.tag or person.name }}"
+                    {% if person.name in tagged_names %}disabled hidden{% endif %}>{{ person.tag or person.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+          <input type="text" id="new-person-name" placeholder="Full name" style="flex:2;">
+          <input type="text" id="new-person-tag" placeholder="Tag" style="flex:1;">
+          <button type="button" class="btn btn-sm" onclick="addPerson()">+ New person</button>
+        </div>
+        <div id="person-error" style="color:#dc2626; font-size:11px; margin-top:4px; display:none;"></div>
+      </div>
+      <div class="field">
         <label>Subjects</label>
         <input type="text" name="subjects" value="{{ scan['subjects'] or '' }}"
                placeholder="e.g. Mom, Dad, Charlie">
@@ -205,26 +241,17 @@
       </div>
       <div class="field">
         <label>Date</label>
-        <input type="text" name="date_inferred" value="{{ scan['date_inferred'] or '' }}"
-               placeholder="YYYY, YYYY-MM, or YYYY-MM-DD">
-      </div>
-      <div class="field">
-        <label>Date source</label>
-        <select name="date_source">
-          <option value="">—</option>
-          {% for src in ['verso_text','verso_image','recto_stamp','visual_cues','llm_guess','manual'] %}
-          <option value="{{ src }}" {% if scan['date_source'] == src %}selected{% endif %}>{{ src }}</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label>Date confidence</label>
-        <select name="date_confidence">
-          <option value="">—</option>
-          {% for conf in ['high','medium','low'] %}
-          <option value="{{ conf }}" {% if scan['date_confidence'] == conf %}selected{% endif %}>{{ conf }}</option>
-          {% endfor %}
-        </select>
+        <div class="readonly-val {% if not scan['date_inferred'] %}empty{% endif %}">
+          {{ scan['date_inferred'] or 'none' }}
+          {% if scan['date_source'] %}<span style="color:#aaa; font-size:11px;">({{ scan['date_source'] }})</span>{% endif %}
+          {% if scan['date_confidence'] %}
+            {% if scan['date_confidence'] in ['high','medium','low'] %}
+            <span class="badge badge-confidence-{{ scan['date_confidence'] }}">{{ scan['date_confidence'] }}</span>
+            {% else %}
+            <span style="color:#aaa; font-size:11px;">{{ scan['date_confidence'] }}</span>
+            {% endif %}
+          {% endif %}
+        </div>
       </div>
       <div class="actions">
         <button type="submit" class="btn btn-primary">Accept →</button>
@@ -251,6 +278,27 @@
     </div>
     {% endif %}
 
+    <div class="field" style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
+      <label>Add date correction</label>
+      <form method="POST" action="{{ urls.date_correction }}" style="display:flex; flex-direction:column; gap:6px;">
+        <input type="text" name="date_value" placeholder="YYYY, YYYY-MM, or YYYY-MM-DD">
+        <div style="display:flex; gap:6px;">
+          <select name="date_source" style="flex:1;">
+            {% for src in ['manual','verso_text','verso_image','recto_stamp','visual_cues','llm_guess'] %}
+            <option value="{{ src }}" {% if src == 'manual' %}selected{% endif %}>{{ src }}</option>
+            {% endfor %}
+          </select>
+          <select name="date_confidence" style="flex:1;">
+            {% for conf in ['high','medium','low'] %}
+            <option value="{{ conf }}" {% if conf == 'high' %}selected{% endif %}>{{ conf }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <input type="text" name="note" placeholder="Note (optional)">
+        <button type="submit" class="btn btn-sm">Add correction</button>
+      </form>
+    </div>
+
     {% else %}
     <!-- Read-only view (safe mode, or a non-editable photo state) -->
     <div class="field">
@@ -264,6 +312,11 @@
       <label>Description</label>
       <div class="readonly-val {% if not scan['description'] %}empty{% endif %}">
         {{ scan['description'] or 'none' }}</div>
+    </div>
+    <div class="field">
+      <label>Persons</label>
+      <div class="readonly-val {% if not persons_for_photo %}empty{% endif %}">
+        {% if persons_for_photo %}{% for p in persons_for_photo %}{{ p.tag or p.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</div>
     </div>
     <div class="field">
       <label>Subjects</label>
@@ -302,6 +355,38 @@
     </div>
     {% endif %}
     {% endif %}
+
+    <details style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
+      <summary style="cursor:pointer; font-size:11px; font-weight:600; text-transform:uppercase;
+                       letter-spacing:.5px; color:#777;">
+        Date history{% if date_history %} ({{ date_history|length }}){% endif %}
+      </summary>
+      {% if date_history %}
+      <div style="margin-top:8px; display:flex; flex-direction:column; gap:8px;">
+        {% for h in date_history %}
+        <div style="font-size:12px; color:#333; border-left:2px solid #eee; padding-left:8px;">
+          <div>
+            <strong>{{ h.date_value or '—' }}</strong>
+            {% if h.date_confidence %}
+              {% if h.date_confidence in ['high','medium','low'] %}
+              <span class="badge badge-confidence-{{ h.date_confidence }}">{{ h.date_confidence }}</span>
+              {% else %}
+              <span style="color:#aaa; font-size:11px;">{{ h.date_confidence }}</span>
+              {% endif %}
+            {% endif %}
+            <span style="color:#aaa; font-size:11px;"> — {{ h.date_source or 'unknown' }}</span>
+          </div>
+          {% if h.note %}
+          <div style="color:#777; font-size:11px;">{{ h.note }}</div>
+          {% endif %}
+          <div style="color:#bbb; font-size:10px;">{{ h.changed_at[:19] }}</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div style="color:#bbb; font-size:12px; margin-top:6px;">No date history yet.</div>
+      {% endif %}
+    </details>
 
     {% if not safe_mode %}
     <div style="margin-top:12px; padding-top:12px; border-top:1px solid #eee;">
@@ -346,6 +431,107 @@ function openLightbox(src) {
 }
 function closeLightbox() {
   document.getElementById('lightbox').classList.remove('visible');
+}
+
+function addChip(name, label) {
+  const container = document.getElementById('persons-chips');
+  if (container.querySelector(`.person-chip[data-name="${CSS.escape(name)}"]`)) return;
+
+  const chip = document.createElement('span');
+  chip.className = 'person-chip';
+  chip.dataset.name = name;
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'chip-label';
+  labelSpan.textContent = label;
+  chip.appendChild(labelSpan);
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'chip-remove';
+  removeBtn.setAttribute('aria-label', 'Remove');
+  removeBtn.innerHTML = '&times;';
+  removeBtn.onclick = () => removePerson(removeBtn);
+  chip.appendChild(removeBtn);
+
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.name = 'persons';
+  hidden.value = name;
+  chip.appendChild(hidden);
+
+  container.appendChild(chip);
+
+  const opt = document.querySelector(`#persons-add-select option[value="${CSS.escape(name)}"]`);
+  if (opt) {
+    opt.disabled = true;
+    opt.hidden = true;
+  }
+}
+
+function removePerson(button) {
+  const chip = button.closest('.person-chip');
+  const name = chip.dataset.name;
+  chip.remove();
+
+  const opt = document.querySelector(`#persons-add-select option[value="${CSS.escape(name)}"]`);
+  if (opt) {
+    opt.disabled = false;
+    opt.hidden = false;
+  }
+}
+
+document.getElementById('persons-add-select')?.addEventListener('change', function () {
+  const opt = this.options[this.selectedIndex];
+  if (!opt.value) return;
+  addChip(opt.value, opt.dataset.label || opt.value);
+  this.value = '';
+});
+
+function addPerson() {
+  const nameInput = document.getElementById('new-person-name');
+  const tagInput = document.getElementById('new-person-tag');
+  const errorDiv = document.getElementById('person-error');
+  const name = nameInput.value.trim();
+  const tag = tagInput.value.trim();
+  errorDiv.style.display = 'none';
+
+  if (!name) {
+    errorDiv.textContent = 'Name is required.';
+    errorDiv.style.display = '';
+    return;
+  }
+
+  fetch('{{ url_for("person_new") }}', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+    },
+    body: new URLSearchParams({ name: name, tag: tag }),
+  })
+    .then(r => r.json().then(data => ({ status: r.status, data: data })))
+    .then(({ status, data }) => {
+      if (status >= 400) {
+        errorDiv.textContent = data.error || 'Could not add person.';
+        errorDiv.style.display = '';
+        return;
+      }
+      const select = document.getElementById('persons-add-select');
+      const option = document.createElement('option');
+      option.value = data.name;
+      option.dataset.label = data.tag || data.name;
+      option.textContent = data.tag || data.name;
+      select.appendChild(option);
+
+      addChip(data.name, data.tag || data.name);
+      nameInput.value = '';
+      tagInput.value = '';
+    })
+    .catch(() => {
+      errorDiv.textContent = 'Could not add person.';
+      errorDiv.style.display = '';
+    });
 }
 
 document.addEventListener('keydown', e => {

@@ -39,6 +39,39 @@ def test_init_db_creates_envelopes_table():
         conn.close()
 
 
+def test_init_db_migrates_old_id_keyed_persons_schema():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        conn.execute("DROP TABLE photo_persons")
+        conn.execute("DROP TABLE persons")
+        conn.executescript("""
+            CREATE TABLE persons (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT NOT NULL,
+                birth_date TEXT
+            );
+            CREATE TABLE photo_persons (
+                hash      TEXT NOT NULL REFERENCES scans(hash),
+                person_id INTEGER NOT NULL REFERENCES persons(id),
+                PRIMARY KEY (hash, person_id)
+            );
+        """)
+        conn.execute("INSERT INTO persons (id, name, birth_date) VALUES (1, 'Jane Ziff', '1932-05')")
+        conn.execute("INSERT INTO photo_persons (hash, person_id) VALUES ('deadbeef', 1)")
+        conn.commit()
+        conn.close()
+
+        conn = tagger.init_db(d)
+        rows = tagger.list_persons(conn)
+        assert [r["name"] for r in rows] == ["Jane Ziff"]
+        assert rows[0]["birth_date"] == "1932-05"
+        assert rows[0]["tag"] is None
+
+        persons = tagger.get_persons_for_photo(conn, "deadbeef")
+        assert [p["name"] for p in persons] == ["Jane Ziff"]
+        conn.close()
+
+
 def test_init_db_creates_scans_table():
     with tempfile.TemporaryDirectory() as d:
         conn = tagger.init_db(d)
@@ -70,6 +103,23 @@ def test_init_db_scans_has_expected_columns():
             "hash", "filename", "scan_dir", "is_verso", "verso_hash",
             "envelope_id", "verso_text", "recto_stamp_text", "description",
             "date_inferred", "date_source", "state", "jpeg_path", "uploaded_at",
+        }
+        assert expected <= cols
+        conn.close()
+
+
+def test_init_db_creates_date_history_table():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        assert "date_history" in tables
+
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(date_history)")}
+        expected = {
+            "id", "hash", "date_value", "date_source", "date_confidence",
+            "changed_at", "note", "person_name",
         }
         assert expected <= cols
         conn.close()
@@ -442,6 +492,302 @@ def test_list_envelopes_zero_count_for_empty_envelope():
         conn.close()
 
 
+# --- person tagging ---
+
+def test_add_person_creates_record():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff")
+        row = conn.execute("SELECT name, tag, birth_date FROM persons WHERE name = 'Jane Ziff'").fetchone()
+        assert row is not None
+        assert row[0] == "Jane Ziff"
+        assert row[1] is None
+        assert row[2] is None
+        conn.close()
+
+
+def test_add_person_with_tag_and_birth_date():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff", "Jane", "1932-05")
+        row = conn.execute("SELECT tag, birth_date FROM persons WHERE name = 'Jane Ziff'").fetchone()
+        assert row[0] == "Jane"
+        assert row[1] == "1932-05"
+        conn.close()
+
+
+def test_add_person_duplicate_name_is_noop():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff", "Jane")
+        tagger.add_person(conn, "Jane Ziff", "Jane Z")
+        rows = conn.execute("SELECT tag FROM persons WHERE name = 'Jane Ziff'").fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "Jane"
+        conn.close()
+
+
+def test_tags_must_be_unique():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff", "Jane")
+        # Different name, same tag -> insert is ignored (tag uniqueness wins).
+        tagger.add_person(conn, "Janet Smith", "Jane")
+        rows = conn.execute("SELECT name FROM persons").fetchall()
+        assert [r[0] for r in rows] == ["Jane Ziff"]
+        conn.close()
+
+
+def test_multiple_persons_can_have_no_tag():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff")
+        tagger.add_person(conn, "Walter Ziff")
+        rows = tagger.list_persons(conn)
+        assert [r["name"] for r in rows] == ["Jane Ziff", "Walter Ziff"]
+        assert all(r["tag"] is None for r in rows)
+        conn.close()
+
+
+def test_list_persons_returns_all_sorted_by_name():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Walter Ziff", "Walter")
+        tagger.add_person(conn, "Anna Ziff", "Anna", "1945")
+        rows = tagger.list_persons(conn)
+        assert [r["name"] for r in rows] == ["Anna Ziff", "Walter Ziff"]
+        assert rows[0]["tag"] == "Anna"
+        assert rows[0]["birth_date"] == "1945"
+        conn.close()
+
+
+def test_update_person_renames_and_updates_fields():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_person(conn, "Jane Ziff", "Jane")
+        tagger.update_person(conn, "Jane Ziff", "Jane Smith", "Jane", "1950-02-01")
+        rows = tagger.list_persons(conn)
+        assert [r["name"] for r in rows] == ["Jane Smith"]
+        assert rows[0]["tag"] == "Jane"
+        assert rows[0]["birth_date"] == "1950-02-01"
+        conn.close()
+
+
+def test_update_person_rename_updates_photo_persons():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_person(conn, "Jane Ziff", "Jane")
+        tagger.set_persons_for_photo(conn, scan["hash"], ["Jane Ziff"])
+        tagger.update_person(conn, "Jane Ziff", "Jane Smith", "Jane")
+
+        persons = tagger.get_persons_for_photo(conn, scan["hash"])
+        assert [p["name"] for p in persons] == ["Jane Smith"]
+        conn.close()
+
+
+def test_get_persons_for_photo_empty_when_untagged():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+        assert tagger.get_persons_for_photo(conn, scan["hash"]) == []
+        conn.close()
+
+
+def test_set_persons_for_photo_and_get():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_person(conn, "Anna Ziff", "Anna", "1945")
+        tagger.add_person(conn, "Walter Ziff", "Walter")
+        tagger.set_persons_for_photo(conn, scan["hash"], ["Anna Ziff", "Walter Ziff"])
+
+        persons = tagger.get_persons_for_photo(conn, scan["hash"])
+        assert [p["name"] for p in persons] == ["Anna Ziff", "Walter Ziff"]
+        conn.close()
+
+
+def test_set_persons_for_photo_replaces_existing():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_person(conn, "Anna Ziff", "Anna")
+        tagger.add_person(conn, "Walter Ziff", "Walter")
+        tagger.set_persons_for_photo(conn, scan["hash"], ["Anna Ziff"])
+        tagger.set_persons_for_photo(conn, scan["hash"], ["Walter Ziff"])
+
+        persons = tagger.get_persons_for_photo(conn, scan["hash"])
+        assert [p["name"] for p in persons] == ["Walter Ziff"]
+        conn.close()
+
+
+def test_set_persons_for_photo_empty_list_clears():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_person(conn, "Anna Ziff", "Anna")
+        tagger.set_persons_for_photo(conn, scan["hash"], ["Anna Ziff"])
+        tagger.set_persons_for_photo(conn, scan["hash"], [])
+
+        assert tagger.get_persons_for_photo(conn, scan["hash"]) == []
+        conn.close()
+
+
+# --- date history ---
+
+def test_add_date_history_creates_entry():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_date_history(conn, "abc123", "1965", "verso_text", "high", note="postmark")
+        rows = tagger.get_date_history(conn, "abc123")
+        assert len(rows) == 1
+        assert rows[0]["date_value"] == "1965"
+        assert rows[0]["date_source"] == "verso_text"
+        assert rows[0]["date_confidence"] == "high"
+        assert rows[0]["note"] == "postmark"
+        assert rows[0]["changed_at"]
+        conn.close()
+
+
+def test_get_date_history_empty_for_unknown_hash():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        assert tagger.get_date_history(conn, "abc123") == []
+        conn.close()
+
+
+def test_get_date_history_ordered_oldest_first():
+    with tempfile.TemporaryDirectory() as d:
+        conn = tagger.init_db(d)
+        tagger.add_date_history(conn, "abc123", "1965", "llm_guess", "low")
+        tagger.add_date_history(conn, "abc123", "1966", "verso_text", "high")
+        rows = tagger.get_date_history(conn, "abc123")
+        assert [r["date_value"] for r in rows] == ["1965", "1966"]
+        conn.close()
+
+
+def test_recalculate_date_single_vote():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_date_history(conn, scan["hash"], "1965", "llm_guess", "low")
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] == "1965"
+        assert updated["date_confidence"] == "low"
+        conn.close()
+
+
+def test_recalculate_date_higher_confidence_wins():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_date_history(conn, scan["hash"], "1965", "llm_guess", "low")
+        tagger.add_date_history(conn, scan["hash"], "1972", "verso_text", "high")
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] == "1972"
+        assert updated["date_confidence"] == "high"
+        conn.close()
+
+
+def test_recalculate_date_corroborating_low_votes_outweigh_single_medium():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        # Two "low" votes (weight 1 each = 2 total) for 1965 outweigh one
+        # "medium" vote (weight 2) for 1970.
+        tagger.add_date_history(conn, scan["hash"], "1965", "llm_guess", "low")
+        tagger.add_date_history(conn, scan["hash"], "1970", "recto_stamp", "medium")
+        tagger.add_date_history(conn, scan["hash"], "1965", "visual_cues", "low")
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] == "1965"
+        assert updated["date_confidence"] == "low"
+        conn.close()
+
+
+def test_recalculate_date_tie_breaks_to_most_recent():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_date_history(conn, scan["hash"], "1965", "llm_guess", "medium")
+        tagger.add_date_history(conn, scan["hash"], "1972", "recto_stamp", "medium")
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] == "1972"
+        assert updated["date_confidence"] == "medium"
+        conn.close()
+
+
+def test_recalculate_date_ignores_empty_date_values():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        tagger.add_date_history(conn, scan["hash"], None, "llm_guess", "high")
+        tagger.add_date_history(conn, scan["hash"], "1965", "verso_text", "low")
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] == "1965"
+        assert updated["date_confidence"] == "low"
+        conn.close()
+
+
+def test_recalculate_date_no_history_clears_cached_date():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        scan = tagger.get_scans_for_dir(conn, "scans-2024-01")[0]
+
+        conn.execute(
+            "UPDATE scans SET date_inferred='1965', date_confidence='high' WHERE hash=?",
+            (scan["hash"],),
+        )
+        conn.commit()
+
+        tagger.recalculate_date(conn, scan["hash"])
+
+        updated = tagger.get_scan(conn, scan["hash"])
+        assert updated["date_inferred"] is None
+        assert updated["date_confidence"] is None
+        conn.close()
+
+
 # --- get_recent_pair / set_verso_pair ---
 
 def _seed_pair(conn, archive, scan_dir):
@@ -763,16 +1109,48 @@ def test_accept_photo_saves_metadata_and_sets_reviewed():
         with patch("tagger.write_exif"):
             tagger.accept_photo(conn, h, archive,
                                 description="Family at beach",
-                                date_inferred="1972-07",
-                                date_source="manual",
                                 subjects="Mom, Dad, Charlie")
 
         row = conn.execute("SELECT * FROM scans WHERE hash=?", (h,)).fetchone()
         assert row["state"] == "REVIEWED"
         assert row["description"] == "Family at beach"
-        assert row["date_inferred"] == "1972-07"
-        assert row["date_source"] == "manual"
         assert row["subjects"] == "Mom, Dad, Charlie"
+        conn.close()
+
+
+def test_accept_photo_does_not_alter_cached_date_fields():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+
+        tagger.add_date_history(conn, h, "1972-07", "manual", "high")
+        tagger.recalculate_date(conn, h)
+
+        with patch("tagger.write_exif"):
+            tagger.accept_photo(conn, h, archive, description="Family at beach")
+
+        row = conn.execute("SELECT * FROM scans WHERE hash=?", (h,)).fetchone()
+        assert row["date_inferred"] == "1972-07"
+        assert row["date_confidence"] == "high"
+        conn.close()
+
+
+def test_accept_photo_writes_exif_with_cached_date():
+    with tempfile.TemporaryDirectory() as d:
+        conn, archive = open_archive(d, "scans-2024-01")
+        make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
+        tagger.scan_directory(conn, archive, "scans-2024-01")
+        h = conn.execute("SELECT hash FROM scans").fetchone()[0]
+
+        tagger.add_date_history(conn, h, "1972-07", "manual", "high")
+        tagger.recalculate_date(conn, h)
+
+        with patch("tagger.write_exif") as mock_write_exif:
+            tagger.accept_photo(conn, h, archive, description="Family at beach")
+
+        assert mock_write_exif.call_args.kwargs["date_inferred"] == "1972-07"
         conn.close()
 
 

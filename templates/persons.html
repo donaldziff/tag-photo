@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Persons — {{ archive_name }}{% endblock %}
+{% block nav %}<span style="color:#fff; font-weight:600;">Persons</span>{% endblock %}
+{% block head %}
+<style>
+  .add-person {
+    background:#fff; border:1px solid #ddd; border-radius:8px;
+    padding:16px 20px; margin-bottom:24px; display:flex;
+    gap:12px; align-items:flex-end; flex-wrap:wrap;
+  }
+  .add-person .field { display:flex; flex-direction:column; gap:4px; }
+  .add-person label { font-size:11px; font-weight:600; text-transform:uppercase;
+                       letter-spacing:.5px; color:#777; }
+  .add-person input { padding:6px 8px; border:1px solid #ddd; border-radius:4px;
+                       font-size:13px; font-family:inherit; background:#fafafa; }
+  .add-person input:focus { outline:none; border-color:#2563eb; background:#fff; }
+
+  table.persons { width:100%; max-width:640px; border-collapse:collapse;
+                   background:#fff; border:1px solid #ddd; border-radius:8px;
+                   overflow:hidden; }
+  table.persons th, table.persons td { padding:8px 12px; text-align:left;
+                                         border-bottom:1px solid #eee; font-size:13px; }
+  table.persons th { font-size:11px; font-weight:600; text-transform:uppercase;
+                      letter-spacing:.5px; color:#777; background:#fafafa; }
+  table.persons tr:last-child td { border-bottom:none; }
+  table.persons td.actions { text-align:right; white-space:nowrap; }
+  .edit-row form { display:flex; gap:8px; align-items:center; }
+  .edit-row input { padding:5px 8px; border:1px solid #ddd; border-radius:4px;
+                     font-size:13px; font-family:inherit; }
+  .edit-row input:focus { outline:none; border-color:#2563eb; }
+  .edit-row .name-input { width:160px; }
+  .edit-row .tag-input { width:100px; }
+  .edit-row .birth-input { width:140px; }
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="add-person">
+  <form method="POST" action="{{ url_for('person_new') }}"
+        style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+    <div class="field">
+      <label>Name</label>
+      <input type="text" name="name" placeholder="e.g. Jane Ziff" required
+             style="width:180px;" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Tag</label>
+      <input type="text" name="tag" placeholder="e.g. Jane"
+             style="width:120px;" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>Birth date</label>
+      <input type="text" name="birth_date" placeholder="YYYY, YYYY-MM, or YYYY-MM-DD"
+             style="width:180px;" autocomplete="off">
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Add person</button>
+  </form>
+</div>
+
+{% if persons %}
+<table class="persons">
+  <thead>
+    <tr><th>Name</th><th>Tag</th><th>Birth date</th>{% if not safe_mode %}<th></th>{% endif %}</tr>
+  </thead>
+  <tbody>
+    {% for person in persons %}
+    <tr id="view-{{ loop.index }}">
+      <td>{{ person.name }}</td>
+      <td>{{ person.tag or '—' }}</td>
+      <td>{{ person.birth_date or '—' }}</td>
+      {% if not safe_mode %}
+      <td class="actions"><button class="btn btn-sm" onclick="startEdit({{ loop.index }})">Edit</button></td>
+      {% endif %}
+    </tr>
+    {% if not safe_mode %}
+    <tr id="edit-{{ loop.index }}" class="edit-row" style="display:none;">
+      <td colspan="4">
+        <form method="POST" action="{{ url_for('person_update', name=person.name) }}">
+          <input type="text" name="name" class="name-input" value="{{ person.name }}" required>
+          <input type="text" name="tag" class="tag-input" value="{{ person.tag or '' }}"
+                 placeholder="Tag">
+          <input type="text" name="birth_date" class="birth-input" value="{{ person.birth_date or '' }}"
+                 placeholder="YYYY, YYYY-MM, or YYYY-MM-DD">
+          <button type="submit" class="btn btn-sm btn-primary">Save</button>
+          <button type="button" class="btn btn-sm" onclick="cancelEdit({{ loop.index }})">Cancel</button>
+        </form>
+      </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:#888; margin-top:40px;">No persons yet.</p>
+{% endif %}
+
+<script>
+function startEdit(id) {
+  document.getElementById('view-' + id).style.display = 'none';
+  document.getElementById('edit-' + id).style.display = '';
+}
+function cancelEdit(id) {
+  document.getElementById('edit-' + id).style.display = 'none';
+  document.getElementById('view-' + id).style.display = '';
+}
+</script>
+{% endblock %}

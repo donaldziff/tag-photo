@@ -44,6 +44,7 @@
 <nav>
   <a href="{{ url_for('index') }}" class="brand" style="text-decoration:none; color:inherit;">{{ archive_name }}</a>
   <a href="{{ url_for('envelopes_index') }}" style="color:#999; font-size:13px; text-decoration:none;">Envelopes</a>
+  <a href="{{ url_for('persons_index') }}" style="color:#999; font-size:13px; text-decoration:none;">Persons</a>
   {% block nav %}{% endblock %}
   <span class="sep">|</span>
   <span style="color:#999; font-size:12px;"

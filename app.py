@@ -5,7 +5,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, abort, g, redirect, render_template, request, send_file, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, send_file, url_for
 
 import tagger
 
@@ -44,6 +44,7 @@ def inject_globals():
         "scan_dirs": tagger.get_scan_dirs(db),
         "archive_name": os.path.basename(app.config["ARCHIVE_ROOT"]),
         "all_envelopes": tagger.list_envelopes(db),
+        "all_persons": tagger.list_persons(db),
         "llm_usage": tagger.get_llm_usage_summary(db),
     }
 
@@ -140,6 +141,8 @@ def _detail_context(db, scan_dir, hash_val, state_filter):
     exif = tagger.read_exif(file_path)
     pending = _pending_count(db, scan_dir)
     prev_hash, next_hash = _nav(db, scan_dir, hash_val, state_filter)
+    persons_for_photo = tagger.get_persons_for_photo(db, hash_val)
+    date_history = tagger.get_date_history(db, hash_val)
 
     scope = {"type": "scan_dir", "scan_dir": scan_dir, "label": scan_dir}
     editable = scan["state"] != "SKIPPED"
@@ -163,6 +166,7 @@ def _detail_context(db, scan_dir, hash_val, state_filter):
         "delete_next":    next_url or prev_url or grid_url,
         "extract_verso":  url_for("extract_verso", scan_dir=scan_dir, hash_val=hash_val),
         "infer_date":     url_for("infer_date", scan_dir=scan_dir, hash_val=hash_val),
+        "date_correction": url_for("date_correction", scan_dir=scan_dir, hash_val=hash_val),
         "rotate":         url_for("rotate_scan", scan_dir=scan_dir, hash_val=hash_val),
         "regen_thumb":    url_for("regen_thumb", scan_dir=scan_dir, hash_val=hash_val),
         "swap_verso":     url_for("swap_verso", scan_dir=scan_dir, hash_val=hash_val),
@@ -175,6 +179,7 @@ def _detail_context(db, scan_dir, hash_val, state_filter):
                 exif=exif, scan_dir=scan_dir, editable=editable,
                 state_filter=state_filter, state_qs=state_qs,
                 scope=scope, pending_count=pending, prev_hash=prev_hash, next_hash=next_hash,
+                persons_for_photo=persons_for_photo, date_history=date_history,
                 urls=urls)
 
 
@@ -189,6 +194,8 @@ def _envelope_detail_context(db, envelope_id, hash_val, state_filter):
     all_scans = tagger.get_scans_for_envelope(db, envelope_id)
     pending = sum(1 for s in all_scans if s["state"] == "PENDING")
     prev_hash, next_hash = _envelope_nav(db, envelope_id, hash_val, state_filter)
+    persons_for_photo = tagger.get_persons_for_photo(db, hash_val)
+    date_history = tagger.get_date_history(db, hash_val)
 
     scope = {"type": "envelope", "envelope_id": envelope_id, "label": f"Envelope {envelope_id}"}
     editable = scan["state"] != "SKIPPED"
@@ -213,6 +220,7 @@ def _envelope_detail_context(db, envelope_id, hash_val, state_filter):
         "delete_next":    next_url or prev_url or grid_url,
         "extract_verso":  url_for("extract_verso", scan_dir=scan_dir, hash_val=hash_val),
         "infer_date":     url_for("infer_date", scan_dir=scan_dir, hash_val=hash_val),
+        "date_correction": url_for("date_correction", scan_dir=scan_dir, hash_val=hash_val),
         "swap_verso":     url_for("swap_verso", scan_dir=scan_dir, hash_val=hash_val),
         "swap_verso_next": url_for("envelope_detail", envelope_id=envelope_id, hash_val=scan["verso_hash"], **state_qs) if scan["verso_hash"] else "",
         "prev":           prev_url,
@@ -223,6 +231,7 @@ def _envelope_detail_context(db, envelope_id, hash_val, state_filter):
                 exif=exif, scan_dir=scan_dir, editable=editable,
                 state_filter=state_filter, state_qs=state_qs,
                 scope=scope, pending_count=pending, prev_hash=prev_hash, next_hash=next_hash,
+                persons_for_photo=persons_for_photo, date_history=date_history,
                 urls=urls)
 
 
@@ -315,6 +324,51 @@ def assign_envelope():
 
 
 # ---------------------------------------------------------------------------
+# Person management
+# ---------------------------------------------------------------------------
+
+@app.route("/persons")
+def persons_index():
+    db = get_db()
+    persons = tagger.list_persons(db)
+    return render_template("persons.html", persons=persons)
+
+
+@app.route("/persons/new", methods=["POST"])
+def person_new():
+    db = get_db()
+    name = request.form.get("name", "").strip()
+    tag = request.form.get("tag", "").strip() or None
+    birth_date = request.form.get("birth_date", "").strip() or None
+    wants_json = request.accept_mimetypes.best == "application/json"
+
+    if not name:
+        if wants_json:
+            return jsonify(error="Name is required."), 400
+        return redirect(url_for("persons_index"))
+
+    tagger.add_person(db, name, tag, birth_date)
+
+    if wants_json:
+        row = db.execute("SELECT name, tag FROM persons WHERE name=?", (name,)).fetchone()
+        if row is None:
+            return jsonify(error=f'Tag "{tag}" is already used by another person.'), 409
+        return jsonify(name=row["name"], tag=row["tag"])
+    return redirect(url_for("persons_index"))
+
+
+@app.route("/persons/<name>/update", methods=["POST"])
+def person_update(name):
+    db = get_db()
+    new_name = request.form.get("name", "").strip()
+    tag = request.form.get("tag", "").strip() or None
+    birth_date = request.form.get("birth_date", "").strip() or None
+    if new_name:
+        tagger.update_person(db, name, new_name, tag, birth_date)
+    return redirect(url_for("persons_index"))
+
+
+# ---------------------------------------------------------------------------
 # Unassigned grid
 # ---------------------------------------------------------------------------
 
@@ -402,12 +456,13 @@ def _accept_form(db, hash_val):
         description=request.form.get("description") or None,
         verso_text=request.form.get("verso_text") or None,
         recto_stamp_text=request.form.get("recto_stamp_text") or None,
-        date_inferred=request.form.get("date_inferred") or None,
-        date_source=request.form.get("date_source") or None,
-        date_confidence=request.form.get("date_confidence") or None,
         envelope_id=request.form.get("envelope_id") or None,
         subjects=request.form.get("subjects") or None,
     )
+
+
+def _save_persons(db, hash_val):
+    tagger.set_persons_for_photo(db, hash_val, request.form.getlist("persons"))
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +477,7 @@ def scan_dir_accept(scan_dir, hash_val):
     if state_filter == "PENDING":
         _, next_hash = _nav(db, scan_dir, hash_val, state_filter)
     tagger.accept_photo(db, hash_val, app.config["ARCHIVE_ROOT"], **_accept_form(db, hash_val))
+    _save_persons(db, hash_val)
     if next_hash:
         return redirect(url_for("scan_dir_detail", scan_dir=scan_dir, hash_val=next_hash, **_state_qs()))
     if state_filter == "PENDING":
@@ -463,6 +519,7 @@ def envelope_accept(envelope_id, hash_val):
     if state_filter == "PENDING":
         _, next_hash = _envelope_nav(db, envelope_id, hash_val, state_filter)
     tagger.accept_photo(db, hash_val, app.config["ARCHIVE_ROOT"], **_accept_form(db, hash_val))
+    _save_persons(db, hash_val)
     if next_hash:
         return redirect(url_for("envelope_detail", envelope_id=envelope_id, hash_val=next_hash, **_state_qs()))
     if state_filter == "PENDING":
@@ -576,11 +633,22 @@ def infer_date(scan_dir, hash_val):
     )
     llm_fn = tagger.make_anthropic_llm_fn(conn=db)
     result = tagger.infer_date(llm_fn, preview_path, scan["verso_text"], scan["recto_stamp_text"])
-    db.execute(
-        "UPDATE scans SET date_inferred=?, date_source=?, date_confidence=? WHERE hash=?",
-        (result.get("date"), result.get("date_source"), result.get("date_confidence"), hash_val),
+    tagger.add_date_history(
+        db, hash_val, result.get("date"), result.get("date_source"), result.get("date_confidence")
     )
-    db.commit()
+    tagger.recalculate_date(db, hash_val)
+    return redirect(request.referrer or url_for("scan_dir_detail", scan_dir=scan_dir, hash_val=hash_val))
+
+
+@app.route("/<scan_dir>/date-correction/<hash_val>", methods=["POST"])
+def date_correction(scan_dir, hash_val):
+    db = get_db()
+    date_value = request.form.get("date_value", "").strip() or None
+    date_source = request.form.get("date_source", "").strip() or "manual"
+    date_confidence = request.form.get("date_confidence", "").strip() or None
+    note = request.form.get("note", "").strip() or None
+    tagger.add_date_history(db, hash_val, date_value, date_source, date_confidence, note=note)
+    tagger.recalculate_date(db, hash_val)
     return redirect(request.referrer or url_for("scan_dir_detail", scan_dir=scan_dir, hash_val=hash_val))
 
 
