@@ -726,7 +726,8 @@ def test_reopen_photo_clears_export_state():
         make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
         tagger.scan_directory(conn, archive, "scans-2024-01")
         h = conn.execute("SELECT hash FROM scans").fetchone()[0]
-        conn.execute("UPDATE scans SET state='EXPORTED', jpeg_path='export/x.jpg' WHERE hash=?", (h,))
+        conn.execute("UPDATE scans SET state='REVIEWED', jpeg_path='export/x.jpg', "
+                     "uploaded_at='2024-01-01T00:00:00+00:00' WHERE hash=?", (h,))
         conn.commit()
         tagger.reopen_photo(conn, h)
         row = conn.execute("SELECT state, jpeg_path, uploaded_at FROM scans WHERE hash=?", (h,)).fetchone()
@@ -779,7 +780,7 @@ def test_accept_photo_clears_jpeg_path_when_exported():
         make_tiff(os.path.join(d, "scans-2024-01"), "scan0001.tif", b"img1")
         tagger.scan_directory(conn, archive, "scans-2024-01")
         h = conn.execute("SELECT hash FROM scans").fetchone()[0]
-        conn.execute("UPDATE scans SET state='EXPORTED', jpeg_path='export/x.jpg' WHERE hash=?", (h,))
+        conn.execute("UPDATE scans SET state='REVIEWED', jpeg_path='export/x.jpg' WHERE hash=?", (h,))
         conn.commit()
 
         with patch("tagger.write_exif"):

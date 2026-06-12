@@ -343,7 +343,7 @@ def browse_grid(scan_dir):
         abort(404)
     scans = tagger.get_scans_for_dir(db, scan_dir)
     pending = sum(1 for s in scans if s["state"] == "PENDING")
-    reviewed = sum(1 for s in scans if s["state"] == "REVIEWED")
+    reviewed = sum(1 for s in scans if s["state"] == "REVIEWED" and s["jpeg_path"] is None)
     scope = {"type": "scan_dir", "scan_dir": scan_dir, "label": scan_dir}
     return render_template("grid.html", scans=scans, scan_dir=scan_dir, scope=scope,
                            mode="browse", pending_count=pending, reviewed_count=reviewed,

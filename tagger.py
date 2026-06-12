@@ -56,6 +56,17 @@ def _ensure_schema(conn):
         conn.execute("ALTER TABLE scans ADD COLUMN subjects TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE scans ADD COLUMN asset_id TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    try:
+        conn.execute("ALTER TABLE scans ADD COLUMN store_type TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # EXPORTED/UPLOADED are no longer states; they're derived from jpeg_path/asset_id.
+    conn.execute("UPDATE scans SET state='REVIEWED' WHERE state IN ('EXPORTED', 'UPLOADED')")
     conn.commit()
 
 
@@ -429,7 +440,7 @@ def export_directory(conn, archive_root, scan_dir):
     for scan in scans:
         jpeg_rel_path = export_scan(archive_root, scan)
         conn.execute(
-            "UPDATE scans SET state='EXPORTED', jpeg_path=? WHERE hash=?",
+            "UPDATE scans SET jpeg_path=? WHERE hash=?",
             (jpeg_rel_path, scan["hash"]),
         )
         exported += 1
@@ -438,11 +449,11 @@ def export_directory(conn, archive_root, scan_dir):
 
 
 def mark_uploaded(conn, scan_dir):
-    """Mark all EXPORTED scans in scan_dir as UPLOADED with current timestamp."""
+    """Mark all exported (jpeg_path set), not-yet-uploaded scans in scan_dir as uploaded."""
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     result = conn.execute(
-        "UPDATE scans SET state='UPLOADED', uploaded_at=? WHERE scan_dir=? AND state='EXPORTED'",
+        "UPDATE scans SET uploaded_at=? WHERE scan_dir=? AND jpeg_path IS NOT NULL AND uploaded_at IS NULL",
         (now, scan_dir),
     )
     conn.commit()
@@ -562,10 +573,10 @@ def accept_photo(conn, hash_val, archive_root, description=None, verso_text=None
                  date_confidence=None, envelope_id=None, subjects=None):
     """Save metadata, write EXIF to the TIFF, and mark the photo REVIEWED.
 
-    If the photo was EXPORTED or UPLOADED, clears jpeg_path and uploaded_at.
+    If the photo had been exported, clears jpeg_path and uploaded_at.
     """
     scan = get_scan(conn, hash_val)
-    was_exported = scan["state"] in ("EXPORTED", "UPLOADED")
+    was_exported = scan["jpeg_path"] is not None
 
     conn.execute("""
         UPDATE scans SET
@@ -597,11 +608,11 @@ def set_scan_state(conn, hash_val, state):
 
 
 def reopen_photo(conn, hash_val):
-    """Drop a photo back to REVIEWED and clear export state (browse-mode edit)."""
+    """Clear export/upload tracking for a REVIEWED photo (browse-mode edit)."""
     scan = get_scan(conn, hash_val)
-    if scan["state"] in ("EXPORTED", "UPLOADED"):
+    if scan["jpeg_path"] is not None:
         conn.execute(
-            "UPDATE scans SET state='REVIEWED', uploaded_at=NULL, jpeg_path=NULL WHERE hash=?",
+            "UPDATE scans SET uploaded_at=NULL, jpeg_path=NULL WHERE hash=?",
             (hash_val,),
         )
         conn.commit()
