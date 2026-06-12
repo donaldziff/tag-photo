@@ -1,5 +1,15 @@
 {% extends "base.html" %}
 {% block nav %}<span style="color:#666">{{ archive_name }}</span>{% endblock %}
+{% block head %}
+<style>
+  .empty-toggle { font-size:12px; color:#666; display:flex; align-items:center;
+                  gap:6px; cursor:pointer; margin-bottom:10px; }
+  .empty-toggle input { cursor:pointer; }
+  .env-li { display:flex; align-items:center; gap:8px; }
+  .env-li.env-empty { display:none; }
+  body.show-empty .env-li.env-empty { display:flex; }
+</style>
+{% endblock %}
 {% block content %}
 <div style="display:flex; gap:40px; flex-wrap:wrap; align-items:flex-start;">
 
@@ -19,9 +29,34 @@
   {% if envelopes %}
   <div>
     <h2 style="margin-bottom:12px; font-size:15px; font-weight:600;">Envelopes</h2>
+    {% set empty_count = namespace(n=0) %}
+    {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes %}
+      {% if scan_count == 0 %}{% set empty_count.n = empty_count.n + 1 %}{% endif %}
+    {% endfor %}
+    {% if empty_count.n %}
+    <label class="empty-toggle">
+      <input type="checkbox" id="show-empty" onchange="toggleEmpty(this.checked)">
+      Show empty envelopes ({{ empty_count.n }})
+    </label>
+    {% endif %}
     <ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
-      {% for env_id, env_desc, scan_count in envelopes %}
-      <li style="display:flex; align-items:center; gap:8px;">
+      {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count > 0 %}
+      <li class="env-li">
+        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
+          {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
+          <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
+        </a>
+        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}" class="btn btn-sm">Browse</a>
+      </li>
+      {% endfor %}
+      {% if empty_count.n %}
+      <li class="env-li env-empty" style="border-top:1px solid #ddd; padding-top:8px; margin-top:4px;">
+        <span style="font-size:11px; font-weight:600; text-transform:uppercase;
+                      letter-spacing:.5px; color:#aaa;">Empty</span>
+      </li>
+      {% endif %}
+      {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count == 0 %}
+      <li class="env-li env-empty">
         <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
           {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
           <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
@@ -34,4 +69,18 @@
   {% endif %}
 
 </div>
+<script>
+function toggleEmpty(checked) {
+  document.body.classList.toggle('show-empty', checked);
+  localStorage.setItem('showEmptyEnvelopes', checked ? '1' : '0');
+}
+document.addEventListener('DOMContentLoaded', () => {
+  const cb = document.getElementById('show-empty');
+  if (cb) {
+    const show = localStorage.getItem('showEmptyEnvelopes') === '1';
+    cb.checked = show;
+    document.body.classList.toggle('show-empty', show);
+  }
+});
+</script>
 {% endblock %}

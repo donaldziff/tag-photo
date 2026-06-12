@@ -244,8 +244,9 @@ def image(hash_val):
 def index():
     db = get_db()
     scan_dirs = tagger.get_scan_dirs(db)
-    envelopes = tagger.list_envelopes(db)
-    if len(scan_dirs) == 1 and not envelopes:
+    envelopes = tagger.get_envelopes_with_thumbnails(db)
+    has_envelopes = any(e["scan_count"] > 0 for e in envelopes)
+    if len(scan_dirs) == 1 and not has_envelopes:
         return redirect(url_for("tag_grid", scan_dir=scan_dirs[0]))
     return render_template("index.html", scan_dirs=scan_dirs, envelopes=envelopes)
 
