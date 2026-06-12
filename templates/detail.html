@@ -64,28 +64,46 @@
 {% endblock %}
 {% block nav %}
   <span class="sep" style="color:#444">|</span>
-  <a href="{{ urls.tag_grid }}"
-     {% if mode=='tag' %}style="color:#fff;font-weight:600"{% endif %}>
-    Tag{% if pending_count %} ({{ pending_count }}){% endif %}
-  </a>
-  <a href="{{ urls.browse_grid }}"
-     {% if mode=='browse' %}style="color:#fff;font-weight:600"{% endif %}>Browse</a>
-  <span class="sep" style="color:#444">|</span>
+  {% set state_param = state_filter|lower if state_filter else 'all' %}
   {% if scope.type == 'scan_dir' %}
   <select onchange="window.location=this.value"
           style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
                  padding:2px 6px;font-size:12px;cursor:pointer;">
+    <option value="{{ url_for('scan_dir_detail', scan_dir=scope.scan_dir, hash_val=scan['hash'], state='pending') }}"
+            {% if state_param=='pending' %}selected{% endif %}>Pending{% if pending_count %} ({{ pending_count }}){% endif %}</option>
+    <option value="{{ url_for('scan_dir_detail', scan_dir=scope.scan_dir, hash_val=scan['hash'], state='reviewed') }}"
+            {% if state_param=='reviewed' %}selected{% endif %}>Reviewed</option>
+    <option value="{{ url_for('scan_dir_detail', scan_dir=scope.scan_dir, hash_val=scan['hash'], state='needs_pairing') }}"
+            {% if state_param=='needs_pairing' %}selected{% endif %}>Needs Pairing</option>
+    <option value="{{ url_for('scan_dir_detail', scan_dir=scope.scan_dir, hash_val=scan['hash'], state='all') }}"
+            {% if state_param=='all' %}selected{% endif %}>All</option>
+  </select>
+  <span class="sep" style="color:#444">|</span>
+  <select onchange="window.location=this.value"
+          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
+                 padding:2px 6px;font-size:12px;cursor:pointer;">
     {% for dir in scan_dirs %}
-    <option value="{{ url_for('tag_detail' if mode=='tag' else 'browse_detail', scan_dir=dir, hash_val=scan['hash']) if dir == scope.scan_dir else url_for('tag_grid' if mode=='tag' else 'browse_grid', scan_dir=dir) }}"
+    <option value="{{ url_for('scan_dir_detail', scan_dir=dir, hash_val=scan['hash'], **state_qs) if dir == scope.scan_dir else url_for('scan_dir_grid', scan_dir=dir, **state_qs) }}"
             {% if dir == scope.scan_dir %}selected{% endif %}>{{ dir }}</option>
     {% endfor %}
   </select>
   {% else %}
+  <select onchange="window.location=this.value"
+          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
+                 padding:2px 6px;font-size:12px;cursor:pointer;">
+    <option value="{{ url_for('envelope_detail', envelope_id=scope.envelope_id, hash_val=scan['hash'], state='pending') }}"
+            {% if state_param=='pending' %}selected{% endif %}>Pending{% if pending_count %} ({{ pending_count }}){% endif %}</option>
+    <option value="{{ url_for('envelope_detail', envelope_id=scope.envelope_id, hash_val=scan['hash'], state='reviewed') }}"
+            {% if state_param=='reviewed' %}selected{% endif %}>Reviewed</option>
+    <option value="{{ url_for('envelope_detail', envelope_id=scope.envelope_id, hash_val=scan['hash'], state='needs_pairing') }}"
+            {% if state_param=='needs_pairing' %}selected{% endif %}>Needs Pairing</option>
+    <option value="{{ url_for('envelope_detail', envelope_id=scope.envelope_id, hash_val=scan['hash'], state='all') }}"
+            {% if state_param=='all' %}selected{% endif %}>All</option>
+  </select>
+  <span class="sep" style="color:#444">|</span>
   <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
   {% endif %}
 {% endblock %}
-
-{% set editable = mode == 'tag' or (mode == 'browse' and scan['state'] in ('PENDING','REVIEWED','NEEDS_PAIRING')) %}
 
 {% block content %}
 <div class="nav-row">
@@ -94,7 +112,7 @@
     <span style="font-size:13px; color:#555; margin-left:8px;">{{ scan['filename'] }}</span>
   </div>
   <div class="nav-links">
-    <a href="{{ urls.tag_grid if mode == 'tag' else urls.browse_grid }}" class="btn btn-sm">← {{ scope.label }}</a>
+    <a href="{{ urls.grid }}" class="btn btn-sm">← {{ scope.label }}</a>
     {% if urls.prev %}
     <a id="nav-prev" href="{{ urls.prev }}" class="btn btn-sm">← Prev</a>
     {% endif %}
@@ -212,7 +230,7 @@
         <button type="submit" class="btn btn-primary">Accept →</button>
       </div>
     </form>
-    {% if mode == 'tag' %}
+    {% if scan['state'] != 'NEEDS_PAIRING' %}
     <div class="actions" style="margin-top:8px;">
       <form method="POST" action="{{ urls.needs_pairing }}">
         <button class="btn btn-warning btn-sm">Needs Pairing</button>
@@ -234,7 +252,7 @@
     {% endif %}
 
     {% else %}
-    <!-- Read-only view (safe mode or browse mode for non-editable states) -->
+    <!-- Read-only view (safe mode, or a non-editable photo state) -->
     <div class="field">
       <label>Envelope</label>
       <div class="readonly-val {% if not scan['envelope_id'] %}empty{% endif %}">

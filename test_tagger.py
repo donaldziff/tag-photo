@@ -680,7 +680,7 @@ def test_get_scans_for_dir_excludes_versos():
         conn.close()
 
 
-def test_get_scans_for_dir_pending_only():
+def test_get_scans_for_dir_state_filter():
     with tempfile.TemporaryDirectory() as d:
         conn, archive = open_archive(d, "scans-2024-01")
         for i, content in enumerate([b"a", b"b", b"c"]):
@@ -688,8 +688,10 @@ def test_get_scans_for_dir_pending_only():
         tagger.scan_directory(conn, archive, "scans-2024-01")
         all_scans = tagger.get_scans_for_dir(conn, "scans-2024-01")
         conn.execute("UPDATE scans SET state='REVIEWED' WHERE hash=?", (all_scans[0]["hash"],))
-        pending = tagger.get_scans_for_dir(conn, "scans-2024-01", pending_only=True)
+        pending = tagger.get_scans_for_dir(conn, "scans-2024-01", state="PENDING")
         assert len(pending) == 2
+        reviewed = tagger.get_scans_for_dir(conn, "scans-2024-01", state="REVIEWED")
+        assert len(reviewed) == 1
         conn.close()
 
 

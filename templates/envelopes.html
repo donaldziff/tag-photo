@@ -66,12 +66,12 @@
 </div>
 
 <div style="margin-bottom:20px;">
-  <a href="{{ url_for('unassigned_browse_grid') }}" class="btn">
+  <a href="{{ url_for('unassigned_grid', state='all') }}" class="btn">
     No envelope
     <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ unassigned_count }})</span>
   </a>
   {% if unassigned_pending %}
-  <a href="{{ url_for('unassigned_tag_grid') }}" class="btn btn-sm" style="margin-left:6px;">
+  <a href="{{ url_for('unassigned_grid', state='pending') }}" class="btn btn-sm" style="margin-left:6px;">
     Tag ({{ unassigned_pending }})
   </a>
   {% endif %}
@@ -92,7 +92,7 @@
   {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count > 0 %}
   <div class="env-card">
     {% if sample_hash %}
-    <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}">
+    <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='all') }}">
       <img class="env-thumb" src="{{ url_for('thumbnail', hash_val=sample_hash) }}"
            loading="lazy" alt="{{ env_id }}">
     </a>
@@ -107,9 +107,9 @@
         {% if pending_count %}<span style="color:#92400e;"> · {{ pending_count }} pending</span>{% endif %}
       </div>
       <div class="env-actions">
-        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}"
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='pending') }}"
            class="btn btn-sm btn-primary">Tag</a>
-        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}"
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='all') }}"
            class="btn btn-sm">Browse</a>
         {% if not safe_mode %}
         <button class="btn btn-sm"
@@ -141,11 +141,11 @@
   <ul class="env-empty-list">
     {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count == 0 %}
     <li>
-      <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
+      <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='pending') }}" class="btn">
         {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
         <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
       </a>
-      <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}" class="btn btn-sm">Browse</a>
+      <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='all') }}" class="btn btn-sm">Browse</a>
     </li>
     {% endfor %}
   </ul>

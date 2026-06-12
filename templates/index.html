@@ -18,8 +18,8 @@
     <ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
       {% for sd in scan_dirs %}
       <li>
-        <a href="{{ url_for('tag_grid', scan_dir=sd) }}" class="btn">{{ sd }}</a>
-        <a href="{{ url_for('browse_grid', scan_dir=sd) }}" class="btn btn-sm"
+        <a href="{{ url_for('scan_dir_grid', scan_dir=sd, state='pending') }}" class="btn">{{ sd }}</a>
+        <a href="{{ url_for('scan_dir_grid', scan_dir=sd, state='all') }}" class="btn btn-sm"
            style="margin-left:6px;">Browse</a>
       </li>
       {% endfor %}
@@ -42,11 +42,11 @@
     <ul style="list-style:none; display:flex; flex-direction:column; gap:8px;">
       {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count > 0 %}
       <li class="env-li">
-        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='pending') }}" class="btn">
           {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
           <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
         </a>
-        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}" class="btn btn-sm">Browse</a>
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='all') }}" class="btn btn-sm">Browse</a>
       </li>
       {% endfor %}
       {% if empty_count.n %}
@@ -57,11 +57,11 @@
       {% endif %}
       {% for env_id, env_desc, scan_count, pending_count, sample_hash in envelopes if scan_count == 0 %}
       <li class="env-li env-empty">
-        <a href="{{ url_for('envelope_tag_grid', envelope_id=env_id) }}" class="btn">
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='pending') }}" class="btn">
           {{ env_id }}{% if env_desc %} — {{ env_desc }}{% endif %}
           <span style="font-size:11px; color:#94a3b8; margin-left:4px;">({{ scan_count }})</span>
         </a>
-        <a href="{{ url_for('envelope_browse_grid', envelope_id=env_id) }}" class="btn btn-sm">Browse</a>
+        <a href="{{ url_for('envelope_grid', envelope_id=env_id, state='all') }}" class="btn btn-sm">Browse</a>
       </li>
       {% endfor %}
     </ul>

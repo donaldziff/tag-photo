@@ -201,25 +201,29 @@ def get_envelope(conn, envelope_id):
     return conn.execute("SELECT * FROM envelopes WHERE id = ?", (envelope_id,)).fetchone()
 
 
-def get_scans_unassigned(conn, pending_only=False):
-    """Return recto scans with no envelope assigned."""
-    if pending_only:
+def get_scans_unassigned(conn, state=None):
+    """Return recto scans with no envelope assigned, optionally filtered by state."""
+    if state:
         return conn.execute(
-            "SELECT * FROM scans WHERE envelope_id IS NULL AND is_verso=0 AND state='PENDING'"
-            " ORDER BY scan_dir, rowid"
+            "SELECT * FROM scans WHERE envelope_id IS NULL AND is_verso=0 AND state=?"
+            " ORDER BY scan_dir, rowid",
+            (state,),
         ).fetchall()
     return conn.execute(
         "SELECT * FROM scans WHERE envelope_id IS NULL AND is_verso=0 ORDER BY scan_dir, rowid"
     ).fetchall()
 
 
-def get_scans_for_envelope(conn, envelope_id, pending_only=False):
-    """Return recto scan records for envelope_id, ordered by scan_dir then rowid."""
-    if pending_only:
+def get_scans_for_envelope(conn, envelope_id, state=None):
+    """Return recto scan records for envelope_id, ordered by scan_dir then rowid.
+
+    If state is given, only scans in that state are returned.
+    """
+    if state:
         return conn.execute(
-            "SELECT * FROM scans WHERE envelope_id=? AND is_verso=0 AND state='PENDING'"
+            "SELECT * FROM scans WHERE envelope_id=? AND is_verso=0 AND state=?"
             " ORDER BY scan_dir, rowid",
-            (envelope_id,),
+            (envelope_id, state),
         ).fetchall()
     return conn.execute(
         "SELECT * FROM scans WHERE envelope_id=? AND is_verso=0 ORDER BY scan_dir, rowid",
@@ -227,13 +231,16 @@ def get_scans_for_envelope(conn, envelope_id, pending_only=False):
     ).fetchall()
 
 
-def get_scans_for_dir(conn, scan_dir, pending_only=False):
-    """Return recto scan records for scan_dir, ordered by rowid."""
-    if pending_only:
+def get_scans_for_dir(conn, scan_dir, state=None):
+    """Return recto scan records for scan_dir, ordered by rowid.
+
+    If state is given, only scans in that state are returned.
+    """
+    if state:
         return conn.execute(
-            "SELECT * FROM scans WHERE scan_dir=? AND is_verso=0 AND state='PENDING'"
+            "SELECT * FROM scans WHERE scan_dir=? AND is_verso=0 AND state=?"
             " ORDER BY rowid",
-            (scan_dir,),
+            (scan_dir, state),
         ).fetchall()
     return conn.execute(
         "SELECT * FROM scans WHERE scan_dir=? AND is_verso=0 ORDER BY rowid",
