@@ -60,6 +60,19 @@ def _pending_count(db, scan_dir):
     ).fetchone()[0]
 
 
+def _state_counts(scans):
+    """Count `scans` by filter-relevant state, for the state-filter buttons."""
+    counts = {"pending": 0, "reviewed": 0, "needs_pairing": 0, "all": len(scans)}
+    for s in scans:
+        if s["state"] == "PENDING":
+            counts["pending"] += 1
+        elif s["state"] == "REVIEWED":
+            counts["reviewed"] += 1
+        elif s["state"] == "NEEDS_PAIRING":
+            counts["needs_pairing"] += 1
+    return counts
+
+
 # Maps the `state` query-string param to a DB state value, or None for "all".
 STATE_PARAM_MAP = {
     "pending": "PENDING",
@@ -378,11 +391,10 @@ def unassigned_grid():
     state_filter = _state_filter()
     scans = tagger.get_scans_unassigned(db, state=state_filter)
     all_scans = tagger.get_scans_unassigned(db)
-    pending = sum(1 for s in all_scans if s["state"] == "PENDING")
     scope = {"type": "unassigned", "label": "No envelope assigned"}
     return render_template("grid.html", scans=scans, scope=scope,
                            state_filter=state_filter, state_qs=_state_qs(),
-                           pending_count=pending,
+                           state_counts=_state_counts(all_scans),
                            grid_pair_url="", grid_delete_url="")
 
 
@@ -398,12 +410,11 @@ def scan_dir_grid(scan_dir):
     state_filter = _state_filter()
     scans = tagger.get_scans_for_dir(db, scan_dir, state=state_filter)
     all_scans = tagger.get_scans_for_dir(db, scan_dir)
-    pending = sum(1 for s in all_scans if s["state"] == "PENDING")
     reviewed = sum(1 for s in all_scans if s["state"] == "REVIEWED" and s["jpeg_path"] is None)
     scope = {"type": "scan_dir", "scan_dir": scan_dir, "label": scan_dir}
     return render_template("grid.html", scans=scans, scope=scope,
                            state_filter=state_filter, state_qs=_state_qs(),
-                           pending_count=pending, reviewed_count=reviewed,
+                           state_counts=_state_counts(all_scans), reviewed_count=reviewed,
                            grid_pair_url=url_for("pair_scans", scan_dir=scan_dir),
                            grid_delete_url=url_for("delete_scans", scan_dir=scan_dir))
 
@@ -418,11 +429,10 @@ def envelope_grid(envelope_id):
     state_filter = _state_filter()
     scans = tagger.get_scans_for_envelope(db, envelope_id, state=state_filter)
     all_scans = tagger.get_scans_for_envelope(db, envelope_id)
-    pending = sum(1 for s in all_scans if s["state"] == "PENDING")
     scope = {"type": "envelope", "envelope_id": envelope_id, "label": f"Envelope {envelope_id}"}
     return render_template("grid.html", scans=scans, scope=scope,
                            state_filter=state_filter, state_qs=_state_qs(),
-                           pending_count=pending,
+                           state_counts=_state_counts(all_scans),
                            grid_pair_url=url_for("envelope_pair_scans", envelope_id=envelope_id),
                            grid_delete_url=url_for("envelope_delete_scans", envelope_id=envelope_id))
 

@@ -4,6 +4,16 @@
 <style>
   .toolbar { display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
   .toolbar h2 { font-size:15px; font-weight:600; }
+
+  .state-filters { display:flex; gap:6px; flex-wrap:wrap; }
+  .state-btn {
+    display:inline-block; padding:5px 12px; border-radius:14px;
+    border:1px solid #ddd; background:#fff; color:#555;
+    font-size:12px; font-weight:600; text-decoration:none;
+    transition:background .12s, color .12s, border-color .12s;
+  }
+  .state-btn:hover { background:#f3f4f6; }
+  .state-btn.active { background:#2563eb; color:#fff; border-color:#2563eb; }
   .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:10px; }
 
   /* Card */
@@ -88,21 +98,7 @@
 {% endblock %}
 {% block nav %}
   <span class="sep">|</span>
-  {% set state_param = state_filter|lower if state_filter else 'all' %}
   {% if scope.type == 'scan_dir' %}
-  <select onchange="window.location=this.value"
-          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
-                 padding:2px 6px;font-size:12px;cursor:pointer;">
-    <option value="{{ url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='pending') }}"
-            {% if state_param=='pending' %}selected{% endif %}>Pending{% if pending_count %} ({{ pending_count }}){% endif %}</option>
-    <option value="{{ url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='reviewed') }}"
-            {% if state_param=='reviewed' %}selected{% endif %}>Reviewed</option>
-    <option value="{{ url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='needs_pairing') }}"
-            {% if state_param=='needs_pairing' %}selected{% endif %}>Needs Pairing</option>
-    <option value="{{ url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='all') }}"
-            {% if state_param=='all' %}selected{% endif %}>All</option>
-  </select>
-  <span class="sep">|</span>
   {% set dir_idx = scan_dirs.index(scope.scan_dir) %}
   {% if dir_idx > 0 %}
   <a href="{{ url_for('scan_dir_grid', scan_dir=scan_dirs[dir_idx - 1], **state_qs) }}"
@@ -120,39 +116,34 @@
   <a href="{{ url_for('scan_dir_grid', scan_dir=scan_dirs[dir_idx + 1], **state_qs) }}"
      title="{{ scan_dirs[dir_idx + 1] }}">Dir →</a>
   {% endif %}
-  {% elif scope.type == 'envelope' %}
-  <select onchange="window.location=this.value"
-          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
-                 padding:2px 6px;font-size:12px;cursor:pointer;">
-    <option value="{{ url_for('envelope_grid', envelope_id=scope.envelope_id, state='pending') }}"
-            {% if state_param=='pending' %}selected{% endif %}>Pending{% if pending_count %} ({{ pending_count }}){% endif %}</option>
-    <option value="{{ url_for('envelope_grid', envelope_id=scope.envelope_id, state='reviewed') }}"
-            {% if state_param=='reviewed' %}selected{% endif %}>Reviewed</option>
-    <option value="{{ url_for('envelope_grid', envelope_id=scope.envelope_id, state='needs_pairing') }}"
-            {% if state_param=='needs_pairing' %}selected{% endif %}>Needs Pairing</option>
-    <option value="{{ url_for('envelope_grid', envelope_id=scope.envelope_id, state='all') }}"
-            {% if state_param=='all' %}selected{% endif %}>All</option>
-  </select>
-  <span class="sep">|</span>
-  <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
   {% else %}
-  <select onchange="window.location=this.value"
-          style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;
-                 padding:2px 6px;font-size:12px;cursor:pointer;">
-    <option value="{{ url_for('unassigned_grid', state='pending') }}"
-            {% if state_param=='pending' %}selected{% endif %}>Pending{% if pending_count %} ({{ pending_count }}){% endif %}</option>
-    <option value="{{ url_for('unassigned_grid', state='reviewed') }}"
-            {% if state_param=='reviewed' %}selected{% endif %}>Reviewed</option>
-    <option value="{{ url_for('unassigned_grid', state='needs_pairing') }}"
-            {% if state_param=='needs_pairing' %}selected{% endif %}>Needs Pairing</option>
-    <option value="{{ url_for('unassigned_grid', state='all') }}"
-            {% if state_param=='all' %}selected{% endif %}>All</option>
-  </select>
-  <span class="sep">|</span>
   <span style="color:#ccc; font-size:12px;">{{ scope.label }}</span>
   {% endif %}
 {% endblock %}
 {% block content %}
+{% if scope.type == 'scan_dir' %}
+  {% set state_url_pending = url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='pending') %}
+  {% set state_url_reviewed = url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='reviewed') %}
+  {% set state_url_needs_pairing = url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='needs_pairing') %}
+  {% set state_url_all = url_for('scan_dir_grid', scan_dir=scope.scan_dir, state='all') %}
+{% elif scope.type == 'envelope' %}
+  {% set state_url_pending = url_for('envelope_grid', envelope_id=scope.envelope_id, state='pending') %}
+  {% set state_url_reviewed = url_for('envelope_grid', envelope_id=scope.envelope_id, state='reviewed') %}
+  {% set state_url_needs_pairing = url_for('envelope_grid', envelope_id=scope.envelope_id, state='needs_pairing') %}
+  {% set state_url_all = url_for('envelope_grid', envelope_id=scope.envelope_id, state='all') %}
+{% else %}
+  {% set state_url_pending = url_for('unassigned_grid', state='pending') %}
+  {% set state_url_reviewed = url_for('unassigned_grid', state='reviewed') %}
+  {% set state_url_needs_pairing = url_for('unassigned_grid', state='needs_pairing') %}
+  {% set state_url_all = url_for('unassigned_grid', state='all') %}
+{% endif %}
+{% set state_param = state_filter|lower if state_filter else 'all' %}
+<div class="state-filters">
+  <a class="state-btn{% if state_param=='pending' %} active{% endif %}" href="{{ state_url_pending }}">Pending ({{ state_counts.pending }})</a>
+  <a class="state-btn{% if state_param=='reviewed' %} active{% endif %}" href="{{ state_url_reviewed }}">Reviewed ({{ state_counts.reviewed }})</a>
+  <a class="state-btn{% if state_param=='needs_pairing' %} active{% endif %}" href="{{ state_url_needs_pairing }}">Needs Pairing ({{ state_counts.needs_pairing }})</a>
+  <a class="state-btn{% if state_param=='all' %} active{% endif %}" href="{{ state_url_all }}">All ({{ state_counts.all }})</a>
+</div>
 <div class="toolbar">
   <h2>
     {% if state_filter == 'PENDING' %}
